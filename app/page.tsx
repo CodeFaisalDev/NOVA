@@ -221,14 +221,17 @@ export default function Home() {
   useEffect(() => {
     if (chatSessions.length === 0 || !activeSessionId || agentMessages.length === 0) return;
 
-    setChatSessions(prev => {
-      let isChanged = false;
-      const updated = prev.map(session => {
-        if (session.id === activeSessionId) {
-          const msgIds = session.messages.map(m => m.id).join(',');
-          const activeMsgIds = agentMessages.map(m => m.id).join(',');
-          if (msgIds !== activeMsgIds) {
-            isChanged = true;
+    // Check if the current session actually has different messages before updating state
+    const currentSession = chatSessions.find(s => s.id === activeSessionId);
+    if (!currentSession) return;
+
+    const msgIds = currentSession.messages.map(m => m.id).join(',');
+    const activeMsgIds = agentMessages.map(m => m.id).join(',');
+
+    if (msgIds !== activeMsgIds) {
+      setChatSessions(prev => {
+        const updated = prev.map(session => {
+          if (session.id === activeSessionId) {
             let newTitle = session.title;
             if (newTitle === 'Welcome Session' || newTitle === 'New Chat') {
               const firstUserMsg = agentMessages.find(m => m.sender === 'user');
@@ -242,15 +245,12 @@ export default function Home() {
               messages: agentMessages
             };
           }
-        }
-        return session;
-      });
-
-      if (isChanged) {
+          return session;
+        });
         localStorage.setItem('nova-agent-sessions', JSON.stringify(updated));
-      }
-      return updated;
-    });
+        return updated;
+      });
+    }
   }, [agentMessages, activeSessionId, chatSessions]);
 
   const handleSendAgentMessage = async (text: string) => {
