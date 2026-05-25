@@ -21,9 +21,11 @@ We completed the final iterations of Phase 1 by implementing a collapsible Agent
    - Added a circular `w-12 h-12` floating action button under the 3-dots menu in the toolbar.
    - Embedded a custom `Bot` icon that glows indigo and rotates when the sidebar is active.
    - Positioned the button as an absolute child with a `-left-15.5` offset, making it slide horizontally in sync with the width transition.
-4. **Clean Minimalist Chat UI**:
-   - Created beautiful minimalist welcome cards and summary logs using custom dark-mode tones (`bg-[#07070a]`, `border-zinc-800/60`).
-   - Cleaned up obsolete chat indicators, removing outdated floating action buttons (`MessageSquare` and `Users`) from the New Tab layout.
+4. **Interactive Minimalist Chat Interface**:
+   - Replaced static markup with dynamic chat state lists (`agentMessages`) to enable real-time messaging flow.
+   - Integrated custom rendering engines to format bold text (`**`) and code blocks (` ```json `) safely inside the browser context.
+   - Added interactive suggestion template cards ("Summarize Page", "Extract Data", "SEO Audit") that trigger simulated assistant tasks.
+   - Built a pulsing loading typing indicator, automated viewport scroll-to-bottom effects, and an elegant header button (`+ New Chat`) to clear conversation sessions.
 5. **Repository Initial Commit & Origin Push**:
    - Created a `.gitignore` file to filter out build artifacts (`.next/`, `node_modules/`, `src-tauri/target/`).
    - Initialized Git, committed all completed project changes under the commit tag `"Phase 1 complete"`, and pushed the `main` branch to the remote origin `https://github.com/CodeFaisalDev/NOVA.git`.
