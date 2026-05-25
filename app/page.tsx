@@ -143,6 +143,122 @@ export default function Home() {
   const [agentSidebarWidth, setAgentSidebarWidth] = useState(340);
   const [isResizingAgentSidebar, setIsResizingAgentSidebar] = useState(false);
 
+  // Dynamic interactive agent chat states
+  interface AgentMessage {
+    id: string;
+    sender: 'user' | 'agent';
+    content: string;
+    timestamp: Date;
+  }
+
+  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([
+    {
+      id: 'welcome',
+      sender: 'agent',
+      content: "Hi, I'm N.O.V.A. Agent. I can help you audit security, extract lists, or summarize documents. Choose an action below or ask me anything:",
+      timestamp: new Date(),
+    }
+  ]);
+  const [agentInputValue, setAgentInputValue] = useState('');
+  const [isAgentTyping, setIsAgentTyping] = useState(false);
+
+  const handleSendAgentMessage = (text: string) => {
+    if (!text.trim()) return;
+    const userMsg: AgentMessage = {
+      id: `user-${Date.now()}`,
+      sender: 'user',
+      content: text.trim(),
+      timestamp: new Date(),
+    };
+    setAgentMessages(prev => [...prev, userMsg]);
+    setAgentInputValue('');
+    setIsAgentTyping(true);
+
+    setTimeout(() => {
+      let replyContent = '';
+      const promptClean = text.trim().toLowerCase();
+      
+      if (promptClean.includes('summarize')) {
+        replyContent = `Here is the executive summary for the active page **${pageTitle || 'New Tab'}**:\n\n• **Core Technology**: Developed with a Next.js frontend and lightweight Tauri backend shell.\n• **Performance**: Native child WebKit webviews bypass DOM polling latency.\n• **UX Design**: Fluid sliding transitions, transparent utility panels, and capsule styling.`;
+      } else if (promptClean.includes('extract') || promptClean.includes('data')) {
+        replyContent = `I scanned the page content and extracted the following key metadata parameters in clean JSON:\n\n\`\`\`json\n{\n  "page_title": "${pageTitle || 'New Tab'}",\n  "url": "${url}",\n  "protocol": "HTTPS/SSL Secure",\n  "load_time_ms": 148,\n  "interactive_elements_count": 12\n}\n\`\`\``;
+      } else if (promptClean.includes('seo') || promptClean.includes('audit')) {
+        replyContent = `### 🔍 SEO Parameters Audit:\n\n• **Title Tag**: \`<title>\` element found (Length: 54 chars) ✅\n• **Meta Description**: Configured correctly ✅\n• **Image Alt Tags**: Found 2 images missing fallback labels ⚠️\n• **Headings Hierarchy**: Organized structure (H1 present) ✅`;
+      } else {
+        replyContent = `I've received your request: **"${text}"**.\n\nSince this is a visual agent prototype, I am simulating the cognitive action loop on the page loaded at \`${url}\`. In the next integration phase, I will trigger Phi-4 visual coordinates search and perform the automation!`;
+      }
+
+      const agentReply: AgentMessage = {
+        id: `agent-${Date.now()}`,
+        sender: 'agent',
+        content: replyContent,
+        timestamp: new Date(),
+      };
+      setAgentMessages(prev => [...prev, agentReply]);
+      setIsAgentTyping(false);
+    }, 1000);
+  };
+
+  const handleNewConversation = () => {
+    setAgentMessages([
+      {
+        id: 'welcome',
+        sender: 'agent',
+        content: "Hi, I'm N.O.V.A. Agent. I can help you audit security, extract lists, or summarize documents. Choose an action below or ask me anything:",
+        timestamp: new Date(),
+      }
+    ]);
+    setAgentInputValue('');
+    setIsAgentTyping(false);
+  };
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [agentMessages, isAgentTyping]);
+
+  const renderFormattedText = (text: string) => {
+    return text.split('\n').map((line, lineIdx) => {
+      const parts = line.split('**');
+      const formattedLine = parts.map((part, idx) => {
+        if (idx % 2 === 1) {
+          return <strong key={idx} className="font-bold text-white">{part}</strong>;
+        }
+        return part;
+      });
+      return (
+        <div key={lineIdx} className={lineIdx > 0 ? "mt-1.5" : ""}>
+          {formattedLine}
+        </div>
+      );
+    });
+  };
+
+  const renderMessageContent = (content: string) => {
+    if (content.includes('```')) {
+      const parts = content.split('```');
+      return parts.map((part, idx) => {
+        if (idx % 2 === 1) {
+          const lines = part.split('\n');
+          const language = lines[0] || 'code';
+          const codeText = lines.slice(1).join('\n');
+          return (
+            <div key={idx} className="my-2.5 bg-black/40 border border-zinc-800/80 rounded-lg p-2.5 font-mono text-[9.5px] text-indigo-300 overflow-x-auto leading-relaxed select-text">
+              <div className="flex justify-between items-center text-[7.5px] font-extrabold uppercase tracking-widest text-zinc-500 mb-1.5 pb-1 border-b border-zinc-900/60 select-none">
+                <span>{language}</span>
+                <span className="text-[7px] text-zinc-650">ReadOnly</span>
+              </div>
+              <pre>{codeText}</pre>
+            </div>
+          );
+        }
+        return <div key={idx}>{renderFormattedText(part)}</div>;
+      });
+    }
+    return renderFormattedText(content);
+  };
+
   // isMobile: set ONLY after mount to avoid hydration mismatch (no typeof window in render)
   const [isMobile, setIsMobile] = useState(false);
 
@@ -1609,8 +1725,8 @@ export default function Home() {
               style={{ width: `${agentSidebarWidth}px` }} 
               className="h-full flex flex-col overflow-hidden"
             >
-              {/* 1. Header with Status & Close */}
-              <div className="flex items-center justify-between px-4 py-3.5 bg-[#0f0f15]/50 border-b border-zinc-900/80">
+              {/* 1. Header with Status & New Chat */}
+              <div className="flex items-center justify-between px-4 py-3 bg-[#0f0f15]/50 border-b border-zinc-900/80">
                 <div className="flex items-center gap-2.5">
                   <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/10">
                     <Bot className="w-4.5 h-4.5" />
@@ -1625,79 +1741,85 @@ export default function Home() {
                 </div>
                 
                 <button
-                  onClick={() => alert('Agent history cleared!')}
-                  className="p-1.5 rounded-lg text-zinc-550 hover:text-zinc-350 hover:bg-zinc-900/60 transition-all cursor-pointer animate-in fade-in"
-                  title="Reset Conversation"
+                  onClick={handleNewConversation}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[9.5px] font-extrabold uppercase tracking-wider text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 hover:border-indigo-500/35 transition-all cursor-pointer select-none"
+                  title="New Conversation"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" />
+                  <Plus className="w-3 h-3 text-indigo-400" strokeWidth={3} />
+                  <span>New Chat</span>
                 </button>
               </div>
 
-              {/* 2. Messages Container (Scrollable) */}
+              {/* 2. Messages Container (Dynamic) */}
               <div className="flex-grow overflow-y-auto p-4 flex flex-col gap-5 no-scrollbar bg-[#07070a]/40">
                 
-                {/* Message 1: Agent Welcome */}
-                <div className="flex gap-3 items-start">
-                  <div className="w-7.5 h-7.5 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 flex-shrink-0 border border-indigo-500/10">
-                    <Sparkles className="w-4 h-4" />
-                  </div>
-                  <div className="flex flex-col gap-2 max-w-[85%] text-left">
-                    <div className="p-3 bg-zinc-900/20 border border-zinc-900/55 rounded-2xl text-[11px] font-medium leading-relaxed text-zinc-300">
-                      Hi, I'm <span className="text-indigo-400 font-bold">N.O.V.A. Agent</span>. 
-                      I can help you audit security, extract lists, or summarize documents. Try an option below:
-                    </div>
+                {agentMessages.map((msg) => (
+                  <div 
+                    key={msg.id}
+                    className={`flex gap-3 items-start animate-in fade-in slide-in-from-bottom-2 duration-300 ${
+                      msg.sender === 'user' ? 'justify-end' : ''
+                    }`}
+                  >
+                    {msg.sender === 'agent' && (
+                      <div className="w-7.5 h-7.5 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 flex-shrink-0 border border-indigo-500/10">
+                        <Sparkles className="w-4 h-4" />
+                      </div>
+                    )}
                     
-                    {/* Suggestion pills */}
-                    <div className="flex flex-wrap gap-1.5">
-                      {['Summarize Page', 'Extract Data', 'SEO Audit'].map((text, idx) => (
+                    <div className={`flex flex-col gap-1 max-w-[85%] ${msg.sender === 'user' ? 'text-right max-w-[80%]' : 'text-left'}`}>
+                      <div className={`p-3 rounded-2xl text-[11px] font-medium leading-relaxed ${
+                        msg.sender === 'user'
+                          ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/10 text-left'
+                          : 'bg-zinc-900/20 border border-zinc-900/55 text-zinc-300 text-left'
+                      }`}>
+                        {renderMessageContent(msg.content)}
+                      </div>
+                      <span className={`text-[7.5px] text-zinc-650 font-bold uppercase ${msg.sender === 'user' ? 'mr-1' : 'ml-1'}`}>
+                        {msg.sender === 'user' ? 'You' : 'Copilot'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Typing status indicator */}
+                {isAgentTyping && (
+                  <div className="flex gap-3 items-start animate-pulse">
+                    <div className="w-7.5 h-7.5 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 flex-shrink-0 border border-indigo-500/10">
+                      <Bot className="w-4 h-4" />
+                    </div>
+                    <div className="flex flex-col gap-1 max-w-[85%] text-left">
+                      <div className="p-3 bg-zinc-900/20 border border-zinc-900/50 rounded-2xl flex items-center gap-1.5 py-3">
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce [animation-delay:-0.3s]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce [animation-delay:-0.15s]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Prompt templates (only show on fresh welcome screen) */}
+                {agentMessages.length === 1 && (
+                  <div className="flex flex-col gap-2 mt-2 ml-10">
+                    <span className="text-[8px] text-zinc-600 font-extrabold uppercase tracking-wider select-none">Suggested Prompts</span>
+                    <div className="flex flex-col gap-1.5">
+                      {[
+                        { label: 'Summarize Page', prompt: 'Summarize the key takeaways of this page.' },
+                        { label: 'Extract Data', prompt: 'Extract page metadata structure to clean JSON format.' },
+                        { label: 'SEO Audit', prompt: 'Analyze the heading structures and meta details of this page.' }
+                      ].map((tpl, idx) => (
                         <button
                           key={idx}
-                          onClick={() => alert(`Running: ${text}`)}
-                          className="px-3 py-1 text-[9.5px] font-bold text-zinc-400 hover:text-white bg-zinc-900/40 hover:bg-indigo-600/20 border border-zinc-900/60 hover:border-indigo-500/30 rounded-lg transition-all cursor-pointer"
+                          onClick={() => handleSendAgentMessage(tpl.prompt)}
+                          className="px-3 py-2 text-[10px] font-bold text-zinc-400 hover:text-white bg-zinc-900/20 hover:bg-indigo-600/15 border border-zinc-900/60 hover:border-indigo-500/20 rounded-xl transition-all cursor-pointer text-left w-full"
                         >
-                          {text}
+                          {tpl.label}
                         </button>
                       ))}
                     </div>
                   </div>
-                </div>
+                )}
 
-                {/* Message 2: User Message */}
-                <div className="flex gap-3 items-start justify-end">
-                  <div className="flex flex-col gap-1 max-w-[80%] text-right">
-                    <div className="p-3 rounded-2xl bg-indigo-600/90 text-[11px] font-semibold leading-relaxed text-white shadow-lg shadow-indigo-600/10 text-left">
-                      Summarize the key takeaways of this page.
-                    </div>
-                    <span className="text-[7.5px] text-zinc-600 font-bold uppercase mr-1">You</span>
-                  </div>
-                </div>
-
-                {/* Message 3: Agent Response */}
-                <div className="flex gap-3 items-start">
-                  <div className="w-7.5 h-7.5 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 flex-shrink-0 border border-indigo-500/10">
-                    <Bot className="w-4 h-4" />
-                  </div>
-                  <div className="flex flex-col gap-1 max-w-[85%] text-left">
-                    <div className="p-3.5 bg-zinc-900/20 border border-zinc-900/50 rounded-2xl text-[11px] font-medium leading-relaxed text-zinc-355 flex flex-col gap-2.5">
-                      <div className="flex items-center gap-1.5 text-[10.5px] font-extrabold text-white pb-1.5 border-b border-zinc-900/80">
-                        <Shield className="w-3.5 h-3.5 text-indigo-400" />
-                        <span>Executive Page Summary</span>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex items-start gap-1.5">
-                          <span className="text-indigo-400 font-bold">•</span>
-                          <span>Provides a sleek Next.js layout matching HSL custom theme tones.</span>
-                        </div>
-                        <div className="flex items-start gap-1.5">
-                          <span className="text-indigo-400 font-bold">•</span>
-                          <span>Integrated IPC communication with the native Tauri engine shell.</span>
-                        </div>
-                      </div>
-                    </div>
-                    <span className="text-[7.5px] text-zinc-650 font-bold uppercase ml-1">Copilot</span>
-                  </div>
-                </div>
-
+                <div ref={messagesEndRef} />
               </div>
 
               {/* 3. Input Panel (Bottom) */}
@@ -1705,8 +1827,16 @@ export default function Home() {
                 <div className="relative flex flex-col bg-[#08080c] border border-zinc-900/90 rounded-xl px-3 py-2.5 focus-within:border-indigo-500/50 focus-within:shadow-[0_0_12px_rgba(99,102,241,0.1)] transition-all">
                   <textarea
                     rows={2}
+                    value={agentInputValue}
+                    onChange={(e) => setAgentInputValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendAgentMessage(agentInputValue);
+                      }
+                    }}
                     placeholder="Ask N.O.V.A. to analyze or automate..."
-                    className="w-full bg-transparent text-[11px] text-zinc-200 placeholder-zinc-600 outline-none resize-none font-medium leading-relaxed pr-20 no-scrollbar"
+                    className="w-full bg-transparent text-[11px] text-zinc-200 placeholder-zinc-650 outline-none resize-none font-medium leading-relaxed pr-20 no-scrollbar"
                   />
                   
                   <div className="flex justify-between items-center mt-2.5 pt-2 border-t border-zinc-900/80">
@@ -1720,7 +1850,7 @@ export default function Home() {
                       </button>
                       <button
                         onClick={() => alert('Voice typing coming soon!')}
-                        className="p-1 rounded text-zinc-650 hover:text-zinc-300 hover:bg-zinc-900/50 transition-all cursor-pointer"
+                        className="p-1 rounded text-zinc-600 hover:text-[#ea4335] hover:bg-[#ea4335]/10 transition-all cursor-pointer"
                         title="Voice Input"
                       >
                         <Mic className="w-3.5 h-3.5" />
@@ -1728,15 +1858,20 @@ export default function Home() {
                     </div>
                     
                     <button
-                      onClick={() => alert('Sending instruction...')}
-                      className="p-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/25 active:scale-95 cursor-pointer"
+                      onClick={() => handleSendAgentMessage(agentInputValue)}
+                      disabled={!agentInputValue.trim()}
+                      className={`p-1.5 rounded-lg transition-all active:scale-95 cursor-pointer ${
+                        agentInputValue.trim() 
+                          ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/25' 
+                          : 'bg-zinc-900/50 text-zinc-600 cursor-not-allowed border border-zinc-900/50'
+                      }`}
                       title="Send Command"
                     >
                       <Send className="w-3 h-3" />
                     </button>
                   </div>
                 </div>
-                <div className="text-[8px] text-zinc-600 text-center font-extrabold uppercase tracking-widest">
+                <div className="text-[8px] text-zinc-600 text-center font-extrabold uppercase tracking-widest select-none">
                   N.O.V.A. Browser Copilot v1.0
                 </div>
               </div>
