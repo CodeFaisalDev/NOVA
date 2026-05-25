@@ -263,3 +263,68 @@ pub async fn get_google_suggestions(query: String) -> Result<Vec<String>, String
 
     Ok(vec![])
 }
+
+/// Dispatches a chat completion call to the selected provider using ureq
+#[tauri::command]
+pub async fn call_llm_api(
+    provider: String,
+    api_key: String,
+    model: String,
+    prompt: String,
+    system_prompt: String,
+) -> Result<String, String> {
+    let url = match provider.to_lowercase().as_str() {
+        "groq" => "https://api.groq.com/openai/v1/chat/completions",
+        "openrouter" => "https://openrouter.ai/api/v1/chat/completions",
+        "openai" => "https://api.openai.com/v1/chat/completions",
+        _ => "https://api.groq.com/openai/v1/chat/completions",
+    };
+
+    let payload = serde_json::json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.3
+    });
+
+    let request = ureq::post(url)
+        .set("Authorization", &format!("Bearer {}", api_key))
+        .set("Content-Type", "application/json");
+
+    // OpenRouter requires specific headers sometimes
+    let request = if provider.to_lowercase() == "openrouter" {
+        request
+            .set("HTTP-Referer", "https://github.com/CodeFaisalDev/NOVA")
+            .set("X-Title", "N.O.V.A. Browser")
+    } else {
+        request
+    };
+
+    let response_value: serde_json::Value = request
+        .send_json(payload)
+        .map_err(|e| format!("API request failed: {}", e))?
+        .into_json()
+        .map_err(|e| format!("Failed to read response JSON: {}", e))?;
+
+    if let Some(choices) = response_value["choices"].as_array() {
+        if !choices.is_empty() {
+            if let Some(content) = choices[0]["message"]["content"].as_str() {
+                return Ok(content.to_string());
+            }
+        }
+    }
+
+    if let Some(err_msg) = response_value["error"]["message"].as_str() {
+        return Err(format!("API Error: {}", err_msg));
+    }
+
+    Err(format!("Unexpected response format: {:?}", response_value))
+}

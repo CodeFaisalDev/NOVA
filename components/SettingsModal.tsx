@@ -1,7 +1,7 @@
 'use client';
 
-import React from 'react';
-import { X, Moon, Sun, Laptop, Search, Home, Trash2, ShieldAlert } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, Moon, Sun, Laptop, Search, Home, Trash2, Bot, Eye, EyeOff, Key } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -12,6 +12,12 @@ interface SettingsModalProps {
   setHomepage: (homepage: string) => void;
   searchEngine: 'google' | 'bing' | 'duckduckgo';
   setSearchEngine: (engine: 'google' | 'bing' | 'duckduckgo') => void;
+  aiProvider: string;
+  setAiProvider: (provider: string) => void;
+  aiModel: string;
+  setAiModel: (model: string) => void;
+  aiApiKey: string;
+  setAiApiKey: (key: string) => void;
 }
 
 export default function SettingsModal({
@@ -23,7 +29,14 @@ export default function SettingsModal({
   setHomepage,
   searchEngine,
   setSearchEngine,
+  aiProvider,
+  setAiProvider,
+  aiModel,
+  setAiModel,
+  aiApiKey,
+  setAiApiKey,
 }: SettingsModalProps) {
+  const [showApiKey, setShowApiKey] = useState(false);
   if (!isOpen) return null;
 
   const handleClearHistory = () => {
@@ -127,6 +140,77 @@ export default function SettingsModal({
                 <option value="bing">Bing</option>
                 <option value="duckduckgo">DuckDuckGo</option>
               </select>
+            </div>
+          </div>
+
+          {/* AI Configuration */}
+          <div className="flex flex-col gap-3 border-t border-zinc-200/50 dark:border-zinc-900/60 pt-4">
+            <span className="text-[10px] font-bold text-zinc-400 dark:text-zinc-550 uppercase tracking-wider flex items-center gap-1.5">
+              <Bot className="w-3.5 h-3.5 text-indigo-400" />
+              AI Omniscient Configuration
+            </span>
+
+            {/* Provider select */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-zinc-700 dark:text-zinc-350 flex items-center gap-1">
+                <span>Provider</span>
+              </label>
+              <select
+                value={aiProvider}
+                onChange={(e) => {
+                  setAiProvider(e.target.value);
+                  // Auto-set default models when switching providers
+                  if (e.target.value === 'groq') setAiModel('llama-3.3-70b-versatile');
+                  else if (e.target.value === 'openrouter') setAiModel('meta-llama/llama-3.3-70b-instruct');
+                  else if (e.target.value === 'openai') setAiModel('gpt-4o-mini');
+                }}
+                className="w-full h-9 px-3 text-xs rounded-xl border border-zinc-200 bg-white dark:bg-zinc-900 dark:border-zinc-850 focus:border-indigo-500/50 dark:focus:border-indigo-500/50 text-zinc-800 dark:text-zinc-200 outline-hidden transition-all"
+              >
+                <option value="groq">Groq</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="openai">OpenAI</option>
+              </select>
+            </div>
+
+            {/* Model */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-zinc-700 dark:text-zinc-350">Model</label>
+              <input
+                type="text"
+                value={aiModel}
+                onChange={(e) => setAiModel(e.target.value)}
+                placeholder="e.g. llama-3.3-70b-versatile"
+                className="w-full h-9 px-3 text-xs rounded-xl border border-zinc-200 bg-transparent dark:border-zinc-850 focus:border-indigo-500/50 dark:focus:border-indigo-500/50 text-zinc-800 dark:text-zinc-200 outline-hidden transition-all"
+              />
+            </div>
+
+            {/* API Key */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-zinc-700 dark:text-zinc-350 flex items-center gap-1">
+                <Key className="w-3.5 h-3.5 text-zinc-400" />
+                <span>API Key</span>
+              </label>
+              <div className="relative">
+                <input
+                  type={showApiKey ? 'text' : 'password'}
+                  value={aiApiKey}
+                  onChange={(e) => setAiApiKey(e.target.value)}
+                  placeholder="sk-..."
+                  className="w-full h-9 px-3 pr-9 text-xs rounded-xl border border-zinc-200 bg-transparent dark:border-zinc-850 focus:border-indigo-500/50 dark:focus:border-indigo-500/50 text-zinc-800 dark:text-zinc-200 outline-hidden transition-all font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 transition-colors"
+                >
+                  {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+              <span className="text-[9px] text-zinc-500">
+                {aiProvider === 'groq' && 'Get your key from console.groq.com'}
+                {aiProvider === 'openrouter' && 'Get your key from openrouter.ai/keys'}
+                {aiProvider === 'openai' && 'Get your key from platform.openai.com'}
+              </span>
             </div>
           </div>
 

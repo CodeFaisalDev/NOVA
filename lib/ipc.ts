@@ -115,3 +115,26 @@ export async function getGoogleSuggestions(query: string): Promise<string[]> {
     return [];
   }
 }
+
+/**
+ * Calls the LLM API via the Tauri Rust backend to bypass CORS.
+ */
+export async function callLlmApi(
+  provider: string,
+  apiKey: string,
+  model: string,
+  prompt: string,
+  systemPrompt: string
+): Promise<string> {
+  if (!isTauri()) {
+    return `[Mock Response] I received your message: "${prompt}". Configure a real API key in Settings to connect to ${provider}.`;
+  }
+  return invoke<string>('call_llm_api', {
+    provider,
+    apiKey,
+    model,
+    prompt,
+    systemPrompt,
+  });
+}
+

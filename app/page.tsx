@@ -8,7 +8,8 @@ import {
   getPageUrl, 
   isTauri, 
   resizeBrowserWebview,
-  getGoogleSuggestions
+  getGoogleSuggestions,
+  callLlmApi
 } from '@/lib/ipc';
 import { Search, Star, Globe, X, Settings, Eye, Shield, Lock, Mic, Heart, Sun, Utensils, Film, Plane, MessageSquare, Users, Newspaper, Plus, Bot, Sparkles, Send, Paperclip, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react';
 
@@ -143,6 +144,11 @@ export default function Home() {
   const [agentSidebarWidth, setAgentSidebarWidth] = useState(340);
   const [isResizingAgentSidebar, setIsResizingAgentSidebar] = useState(false);
 
+  // AI Configuration states
+  const [aiProvider, setAiProvider] = useState('groq');
+  const [aiModel, setAiModel] = useState('llama-3.3-70b-versatile');
+  const [aiApiKey, setAiApiKey] = useState('');
+
   // Dynamic interactive agent chat states
   interface AgentMessage {
     id: string;
@@ -162,7 +168,7 @@ export default function Home() {
   const [agentInputValue, setAgentInputValue] = useState('');
   const [isAgentTyping, setIsAgentTyping] = useState(false);
 
-  const handleSendAgentMessage = (text: string) => {
+  const handleSendAgentMessage = async (text: string) => {
     if (!text.trim()) return;
     const userMsg: AgentMessage = {
       id: `user-${Date.now()}`,
@@ -174,29 +180,48 @@ export default function Home() {
     setAgentInputValue('');
     setIsAgentTyping(true);
 
-    setTimeout(() => {
-      let replyContent = '';
-      const promptClean = text.trim().toLowerCase();
-      
-      if (promptClean.includes('summarize')) {
-        replyContent = `Here is the executive summary for the active page **${pageTitle || 'New Tab'}**:\n\n• **Core Technology**: Developed with a Next.js frontend and lightweight Tauri backend shell.\n• **Performance**: Native child WebKit webviews bypass DOM polling latency.\n• **UX Design**: Fluid sliding transitions, transparent utility panels, and capsule styling.`;
-      } else if (promptClean.includes('extract') || promptClean.includes('data')) {
-        replyContent = `I scanned the page content and extracted the following key metadata parameters in clean JSON:\n\n\`\`\`json\n{\n  "page_title": "${pageTitle || 'New Tab'}",\n  "url": "${url}",\n  "protocol": "HTTPS/SSL Secure",\n  "load_time_ms": 148,\n  "interactive_elements_count": 12\n}\n\`\`\``;
-      } else if (promptClean.includes('seo') || promptClean.includes('audit')) {
-        replyContent = `### 🔍 SEO Parameters Audit:\n\n• **Title Tag**: \`<title>\` element found (Length: 54 chars) ✅\n• **Meta Description**: Configured correctly ✅\n• **Image Alt Tags**: Found 2 images missing fallback labels ⚠️\n• **Headings Hierarchy**: Organized structure (H1 present) ✅`;
-      } else {
-        replyContent = `I've received your request: **"${text}"**.\n\nSince this is a visual agent prototype, I am simulating the cognitive action loop on the page loaded at \`${url}\`. In the next integration phase, I will trigger Phi-4 visual coordinates search and perform the automation!`;
-      }
+    // Check if API key is configured
+    if (!aiApiKey.trim()) {
+      const fallbackMsg: AgentMessage = {
+        id: `agent-${Date.now()}`,
+        sender: 'agent',
+        content: `⚠️ **No API Key Configured**\n\nTo use the N.O.V.A. Copilot, please configure your AI provider and API key in **Settings** (nova://settings).\n\nSupported providers:\n• **Groq** — console.groq.com\n• **OpenRouter** — openrouter.ai/keys\n• **OpenAI** — platform.openai.com`,
+        timestamp: new Date(),
+      };
+      setAgentMessages(prev => [...prev, fallbackMsg]);
+      setIsAgentTyping(false);
+      return;
+    }
+
+    try {
+      const systemPrompt = `You are N.O.V.A. Copilot, an AI assistant integrated into a desktop web browser called N.O.V.A. (No-DOM Orchestrated Visual Agent). You help users understand, audit, and interact with webpages.\n\nCurrent browser context:\n- Active page title: "${pageTitle || 'New Tab'}"\n- Active page URL: ${url}\n\nBe concise, helpful, and format responses with markdown when useful. Use bullet points and bold for key information.`;
+
+      const response = await callLlmApi(
+        aiProvider,
+        aiApiKey,
+        aiModel,
+        text.trim(),
+        systemPrompt
+      );
 
       const agentReply: AgentMessage = {
         id: `agent-${Date.now()}`,
         sender: 'agent',
-        content: replyContent,
+        content: response,
         timestamp: new Date(),
       };
       setAgentMessages(prev => [...prev, agentReply]);
+    } catch (err: any) {
+      const errorMsg: AgentMessage = {
+        id: `error-${Date.now()}`,
+        sender: 'agent',
+        content: `❌ **API Error**\n\n${err?.toString() || 'An unknown error occurred.'}\n\nPlease check your API key and model configuration in Settings.`,
+        timestamp: new Date(),
+      };
+      setAgentMessages(prev => [...prev, errorMsg]);
+    } finally {
       setIsAgentTyping(false);
-    }, 1000);
+    }
   };
 
   const handleNewConversation = () => {
@@ -293,6 +318,14 @@ export default function Home() {
     
     const savedShowSidebar = localStorage.getItem('nova-show-sidebar') !== 'false';
     const savedSidebarShortcuts = localStorage.getItem('nova-sidebar-shortcuts');
+    
+    // Load AI configuration
+    const savedAiProvider = localStorage.getItem('nova-ai-provider') || 'groq';
+    const savedAiModel = localStorage.getItem('nova-ai-model') || 'llama-3.3-70b-versatile';
+    const savedAiApiKey = localStorage.getItem('nova-ai-apikey') || '';
+    setAiProvider(savedAiProvider);
+    setAiModel(savedAiModel);
+    setAiApiKey(savedAiApiKey);
     
     setTheme(savedTheme);
     setHomepage(savedHomepage);
@@ -398,6 +431,21 @@ export default function Home() {
   const handleSearchEngineChange = (newEngine: 'google' | 'bing' | 'duckduckgo') => {
     setSearchEngine(newEngine);
     localStorage.setItem('nova-searchengine', newEngine);
+  };
+
+  const handleAiProviderChange = (provider: string) => {
+    setAiProvider(provider);
+    localStorage.setItem('nova-ai-provider', provider);
+  };
+
+  const handleAiModelChange = (model: string) => {
+    setAiModel(model);
+    localStorage.setItem('nova-ai-model', model);
+  };
+
+  const handleAiApiKeyChange = (key: string) => {
+    setAiApiKey(key);
+    localStorage.setItem('nova-ai-apikey', key);
   };
 
   const handleShowBookmarksChange = (val: boolean) => {
@@ -1390,6 +1438,71 @@ export default function Home() {
                     {t.charAt(0).toUpperCase() + t.slice(1)}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            {/* AI Omniscient Configuration */}
+            <div className="flex flex-col gap-3">
+              <h2 className="font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
+                <Bot className="w-4 h-4 text-indigo-400" />
+                AI Omniscient Configuration
+              </h2>
+              <p className="text-xs text-zinc-500">Configure which AI provider powers the N.O.V.A. Copilot sidebar assistant.</p>
+              
+              <div className="flex flex-col gap-4 mt-1 p-4 rounded-2xl bg-zinc-100/50 dark:bg-zinc-900/40 border border-zinc-200/60 dark:border-zinc-800/60">
+                {/* Provider */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Provider</label>
+                  <div className="flex gap-2">
+                    {(['groq', 'openrouter', 'openai'] as const).map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => {
+                          handleAiProviderChange(p);
+                          if (p === 'groq') handleAiModelChange('llama-3.3-70b-versatile');
+                          else if (p === 'openrouter') handleAiModelChange('meta-llama/llama-3.3-70b-instruct');
+                          else if (p === 'openai') handleAiModelChange('gpt-4o-mini');
+                        }}
+                        className={`px-4 py-2 rounded-xl text-xs font-semibold border transition-all ${
+                          aiProvider === p
+                            ? 'bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                            : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                        }`}
+                      >
+                        {p === 'groq' ? 'Groq' : p === 'openrouter' ? 'OpenRouter' : 'OpenAI'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Model */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Model</label>
+                  <input
+                    type="text"
+                    value={aiModel}
+                    onChange={(e) => handleAiModelChange(e.target.value)}
+                    placeholder="e.g. llama-3.3-70b-versatile"
+                    className="w-full max-w-md h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs focus:border-indigo-500 outline-hidden transition-all"
+                  />
+                </div>
+
+                {/* API Key */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">API Key</label>
+                  <input
+                    type="password"
+                    value={aiApiKey}
+                    onChange={(e) => handleAiApiKeyChange(e.target.value)}
+                    placeholder="sk-..."
+                    className="w-full max-w-md h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs focus:border-indigo-500 outline-hidden transition-all font-mono"
+                  />
+                  <span className="text-[10px] text-zinc-500">
+                    {aiProvider === 'groq' && 'Get your key from console.groq.com'}
+                    {aiProvider === 'openrouter' && 'Get your key from openrouter.ai/keys'}
+                    {aiProvider === 'openai' && 'Get your key from platform.openai.com'}
+                  </span>
+                </div>
               </div>
             </div>
 
