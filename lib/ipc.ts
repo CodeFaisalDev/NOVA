@@ -138,3 +138,12 @@ export async function callLlmApi(
   });
 }
 
+/**
+ * Evaluates a javascript snippet in the background browser webview.
+ */
+export async function evalJsInBrowser(js: string): Promise<void> {
+  if (isTauri()) {
+    await invoke<void>('eval_js_in_browser', { js });
+  }
+}
+

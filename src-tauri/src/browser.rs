@@ -15,7 +15,7 @@ pub fn init_background_browser(app: &tauri::App) -> Result<(), Box<dyn std::erro
     let child_builder = WebviewBuilder::new(
         "background_browser",
         WebviewUrl::External("https://www.google.com".parse()?)
-    );
+    ).user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
 
     // 4. Attach the webview as a child of the main window
     #[cfg(target_os = "linux")]
@@ -206,6 +206,15 @@ pub async fn get_page_url(app: AppHandle) -> Result<String, String> {
         .unwrap_or_else(|_| "https://www.google.com".to_string());
         
     Ok(url_str)
+}
+
+/// Evaluates a javascript snippet in the background browser webview
+#[tauri::command]
+pub fn eval_js_in_browser(app: AppHandle, js: String) -> Result<(), String> {
+    let webview = app.get_webview("background_browser")
+        .ok_or_else(|| "Background browser window not found".to_string())?;
+    webview.eval(&js).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Custom window controllers for frameless browser shell

@@ -2,6 +2,9 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import BrowserToolbar from '@/components/BrowserToolbar';
+import ActionCard from '@/components/ActionCard';
+import AgentStatus, { AgentState } from '@/components/AgentStatus';
+import { AgentAction } from '@/lib/schema';
 import { 
   navigateTo, 
   getPageTitle, 
@@ -9,9 +12,10 @@ import {
   isTauri, 
   resizeBrowserWebview,
   getGoogleSuggestions,
-  callLlmApi
+  callLlmApi,
+  evalJsInBrowser
 } from '@/lib/ipc';
-import { Search, Star, Globe, X, Settings, Eye, Shield, Lock, Mic, Heart, Sun, Utensils, Film, Plane, MessageSquare, Users, Newspaper, Plus, Bot, Sparkles, Send, Paperclip, RotateCcw, ChevronLeft, ChevronRight, Trash2, ArrowLeft } from 'lucide-react';
+import { Search, Star, Globe, X, Settings, Eye, Shield, Lock, Mic, Heart, Sun, Utensils, Film, Plane, MessageSquare, Users, Newspaper, Plus, Bot, Sparkles, Send, Paperclip, RotateCcw, ChevronLeft, ChevronRight, Trash2, ArrowLeft, User } from 'lucide-react';
 
 // ─── Frameless Window Resize Handles ──────────────────────────────────────────
 // Tauri with decorations:false has no native resize handles. These invisible
@@ -69,6 +73,7 @@ interface Tab {
   url: string;
   history: string[];
   historyIndex: number;
+  isIncognito?: boolean;
 }
 
 interface Bookmark {
@@ -87,6 +92,30 @@ export interface UserProfile {
   email: string;
   avatarUrl: string;
 }
+
+const getInitials = (name: string): string => {
+  if (!name) return '?';
+  return name.trim().charAt(0).toUpperCase();
+};
+
+const getProfileColor = (name: string): string => {
+  const colors = [
+    'bg-red-650 text-white',
+    'bg-purple-650 text-white',
+    'bg-blue-650 text-white',
+    'bg-emerald-650 text-white',
+    'bg-amber-650 text-white',
+    'bg-pink-650 text-white',
+    'bg-indigo-650 text-white',
+    'bg-cyan-650 text-white',
+  ];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const index = Math.abs(hash) % colors.length;
+  return colors[index];
+};
 
 export default function Home() {
   // Viewport container ref
@@ -123,6 +152,11 @@ export default function Home() {
 
   // User Profile configuration
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [profiles, setProfiles] = useState<UserProfile[]>([]);
+  const [activePopoverWidth, setActivePopoverWidth] = useState(0);
+  const [showGoogleLoginModal, setShowGoogleLoginModal] = useState(false);
+  const [googleClientId, setGoogleClientId] = useState('');
+  const [tempGoogleClientId, setTempGoogleClientId] = useState('');
 
   // Sidebar shortcuts state
   const [showSidebar, setShowSidebar] = useState(true);
@@ -140,7 +174,7 @@ export default function Home() {
   const [isMounted, setIsMounted] = useState(false);
   
   // Agent Sidebar states
-  const [isAgentSidebarOpen, setIsAgentSidebarOpen] = useState(true);
+  const [isAgentSidebarOpen, setIsAgentSidebarOpen] = useState(false);
   const [agentSidebarWidth, setAgentSidebarWidth] = useState(340);
   const [isResizingAgentSidebar, setIsResizingAgentSidebar] = useState(false);
 
@@ -149,12 +183,21 @@ export default function Home() {
   const [aiModel, setAiModel] = useState('llama-3.3-70b-versatile');
   const [aiApiKey, setAiApiKey] = useState('');
 
+  // Local Form Settings states
+  const [tempUserName, setTempUserName] = useState('');
+  const [tempUserEmail, setTempUserEmail] = useState('');
+  const [tempAiProvider, setTempAiProvider] = useState('groq');
+  const [tempAiModel, setTempAiModel] = useState('llama-3.3-70b-versatile');
+  const [tempAiApiKey, setTempAiApiKey] = useState('');
+  const [showSaveSuccess, setShowSaveSuccess] = useState(false);
+
   // Dynamic interactive agent chat states
   interface AgentMessage {
     id: string;
     sender: 'user' | 'agent';
     content: string;
     timestamp: Date;
+    actions?: AgentAction[];
   }
 
   interface ChatSession {
@@ -163,6 +206,8 @@ export default function Home() {
     messages: AgentMessage[];
     createdAt: string;
   }
+
+  const [agentState, setAgentState] = useState<AgentState>('idle');
 
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
   const [agentInputValue, setAgentInputValue] = useState('');
@@ -175,36 +220,34 @@ export default function Home() {
 
   // Load chat sessions from local storage on mount
   useEffect(() => {
+    let formatted: ChatSession[] = [];
     const saved = localStorage.getItem('nova-agent-sessions');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (parsed && parsed.length > 0) {
-          const formatted = parsed.map((s: any) => ({
+          formatted = parsed.map((s: any) => ({
             ...s,
             messages: s.messages.map((m: any) => ({
               ...m,
-              timestamp: new Date(m.timestamp)
+              timestamp: new Date(m.timestamp),
+              actions: m.actions
             }))
           }));
-          setChatSessions(formatted);
-          setActiveSessionId(formatted[0].id);
-          setAgentMessages(formatted[0].messages);
-          return;
         }
       } catch (e) {
         console.error("Failed to parse sessions", e);
       }
     }
     
-    // Initial session if none found
+    // Always start a brand new, fresh session as active on startup
     const initialId = `session-${Date.now()}`;
     const initialSession: ChatSession = {
       id: initialId,
-      title: 'Welcome Session',
+      title: 'New Chat',
       messages: [
         {
-          id: 'welcome',
+          id: `welcome-${Date.now()}`,
           sender: 'agent',
           content: "Hi, I'm N.O.V.A. Agent. I can help you audit security, extract lists, or summarize documents. Choose an action below or ask me anything:",
           timestamp: new Date(),
@@ -212,7 +255,7 @@ export default function Home() {
       ],
       createdAt: new Date().toISOString()
     };
-    setChatSessions([initialSession]);
+    setChatSessions([initialSession, ...formatted]);
     setActiveSessionId(initialId);
     setAgentMessages(initialSession.messages);
   }, []);
@@ -279,7 +322,33 @@ export default function Home() {
     }
 
     try {
-      const systemPrompt = `You are N.O.V.A. Copilot, an AI assistant integrated into a desktop web browser called N.O.V.A. (No-DOM Orchestrated Visual Agent). You help users understand, audit, and interact with webpages.\n\nCurrent browser context:\n- Active page title: "${pageTitle || 'New Tab'}"\n- Active page URL: ${url}\n\nBe concise, helpful, and format responses with markdown when useful. Use bullet points and bold for key information.`;
+      const systemPrompt = `You are the N.O.V.A. Omniscient (Cloud Orchestrator) integrated into a desktop web browser called N.O.V.A. (No-DOM Orchestrated Visual Agent).
+Your goal is to parse user intents and coordinate browser automation tasks.
+
+IMPORTANT: If the user request is an automation, navigation, or interaction request (e.g. searching, clicking elements, extracting list of items, comparing prices, visiting multiple pages, scraping), you MUST respond ONLY with a raw JSON array of action objects. Do NOT wrap it in any text or markdown code blocks (such as \`\`\`json). Output a single parseable JSON array.
+
+Valid action types inside the JSON array are:
+- navigate: {"action": "navigate", "url": "https://url.com"} (always use full absolute URLs starting with http/https)
+- click: {"action": "click", "target": "description of button/input/link to click"}
+- extract: {"action": "extract", "target": "specific data items/text to extract"}
+- wait: {"action": "wait", "target": "stabilization target or reason"}
+- done: {"action": "done"} (always end the action plan with a done action)
+
+Example request: "Search mechanical keyboards on Amazon, extract top 3 models and prices"
+Example response:
+[
+  {"action": "navigate", "url": "https://www.amazon.com"},
+  {"action": "click", "target": "Search input box"},
+  {"action": "click", "target": "Search button after typing mechanical keyboard"},
+  {"action": "extract", "target": "first 3 keyboard names and prices"},
+  {"action": "done"}
+]
+
+If the user's message is a standard conversational query (e.g. "What is this browser?", "Explain how Y works", or just general chatting), respond with a friendly, markdown-formatted text response directly. Do not output JSON for general conversational questions.
+
+Current context:
+- Page Title: "${pageTitle || 'New Tab'}"
+- Page URL: ${url}`;
 
       const response = await callLlmApi(
         aiProvider,
@@ -289,11 +358,45 @@ export default function Home() {
         systemPrompt
       );
 
+      let parsedActions: AgentAction[] | undefined = undefined;
+      let cleanContent = response.trim();
+      
+      // Clean up markdown block wraps if model ignored instructions and wrapped JSON in ```json or ```
+      if (cleanContent.startsWith('```json')) {
+        cleanContent = cleanContent.slice(7);
+      } else if (cleanContent.startsWith('```')) {
+        cleanContent = cleanContent.slice(3);
+      }
+      if (cleanContent.endsWith('```')) {
+        cleanContent = cleanContent.slice(0, -3);
+      }
+      cleanContent = cleanContent.trim();
+
+      if (cleanContent.startsWith('[') && cleanContent.endsWith(']')) {
+        try {
+          const rawActions = JSON.parse(cleanContent);
+          if (Array.isArray(rawActions)) {
+            parsedActions = rawActions.map((act: any, idx: number) => ({
+              id: `action-${Date.now()}-${idx}`,
+              action: act.action || 'wait',
+              url: act.url,
+              target: act.target,
+              status: 'pending'
+            }));
+          }
+        } catch (e) {
+          console.warn("Failed to parse agent action plan JSON", e);
+        }
+      }
+
       const agentReply: AgentMessage = {
         id: `agent-${Date.now()}`,
         sender: 'agent',
-        content: response,
+        content: parsedActions 
+          ? "I have analyzed your request and compiled the following action plan to orchestrate N.O.V.A.:" 
+          : response,
         timestamp: new Date(),
+        actions: parsedActions,
       };
       setAgentMessages(prev => [...prev, agentReply]);
     } catch (err: any) {
@@ -307,6 +410,81 @@ export default function Home() {
     } finally {
       setIsAgentTyping(false);
     }
+  };
+
+  const handleSimulateExecution = async (messageId: string) => {
+    const msg = agentMessages.find(m => m.id === messageId);
+    if (!msg || !msg.actions) return;
+
+    // Clone actions to prevent direct state mutation
+    const actions = msg.actions.map(a => ({ ...a }));
+    
+    for (let i = 0; i < actions.length; i++) {
+      // Set current action status to 'running'
+      actions[i].status = 'running';
+      
+      const actionUrl = actions[i].url;
+      // Update agent state based on action type
+      if (actions[i].action === 'navigate') {
+        setAgentState('navigating');
+        if (actionUrl) {
+          setUrl(actionUrl);
+          setPageTitle("Connecting to background target...");
+        }
+      } else if (actions[i].action === 'extract') {
+        setAgentState('extracting');
+      } else if (actions[i].action === 'click') {
+        setAgentState('navigating'); // Phi-4 Multimodal Eyes
+      } else if (actions[i].action === 'wait') {
+        setAgentState('planning');
+      } else if (actions[i].action === 'done') {
+        setAgentState('done');
+      }
+
+      // Update state to render the 'running' card
+      setAgentMessages(prev => prev.map(m => m.id === messageId ? { ...m, actions } : m));
+      
+      // Wait 2.5 seconds to simulate API/local inference delay
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      
+      // Complete current action
+      actions[i].status = 'completed';
+      
+      // If it's navigate, retrieve the page title fallback
+      if (actions[i].action === 'navigate' && actionUrl) {
+        // Mock navigate execution inside Tauri if running there
+        if (isTauri()) {
+          try {
+            await navigateTo(actionUrl);
+            const title = await getPageTitle();
+            setPageTitle(title || getTitleForUrl(actionUrl));
+          } catch (e) {
+            console.error("Navigation error in simulation", e);
+            setPageTitle(getTitleForUrl(actionUrl));
+          }
+        } else {
+          setPageTitle(getTitleForUrl(actionUrl));
+        }
+      }
+      
+      // Add simulated mock results/output
+      if (actions[i].action === 'extract') {
+        actions[i].result = JSON.stringify({
+          source: url,
+          items: [
+            { name: "Premium Mechanical Keyboard Q4", price: "$149.00", rating: "4.9" },
+            { name: "Sleek Minimalist Hot-Swap Keyboard", price: "$99.99", rating: "4.7" },
+            { name: "Wireless Tenkeyless Mechanical Keyboard", price: "$119.50", rating: "4.6" }
+          ]
+        }, null, 2);
+      } else if (actions[i].action === 'click') {
+        actions[i].result = JSON.stringify({ click_x: 742, click_y: 512, DOM_selector_dependency: "none" }, null, 2);
+      }
+      
+      setAgentMessages(prev => prev.map(m => m.id === messageId ? { ...m, actions } : m));
+    }
+    
+    setAgentState('done');
   };
 
   const handleNewConversation = () => {
@@ -463,6 +641,10 @@ export default function Home() {
     setAiModel(savedAiModel);
     setAiApiKey(savedAiApiKey);
     
+    setTempAiProvider(savedAiProvider);
+    setTempAiModel(savedAiModel);
+    setTempAiApiKey(savedAiApiKey);
+    
     setTheme(savedTheme);
     setHomepage(savedHomepage);
     setSearchEngine(savedSearchEngine);
@@ -475,9 +657,35 @@ export default function Home() {
     if (savedHistory) {
       setHistory(JSON.parse(savedHistory));
     }
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
+    const savedProfiles = localStorage.getItem('nova-profiles');
+    if (savedProfiles) {
+      const parsed = JSON.parse(savedProfiles) as UserProfile[];
+      const cleaned = parsed.filter(p => 
+        p.email !== 'bdg.nova@gmail.com' &&
+        p.email !== 'fahimtertertwo@gmail.com' &&
+        p.email !== 'fahimtesterone@gmail.com' &&
+        p.email !== 'code.faisal.dev@gmail.com'
+      );
+      setProfiles(cleaned);
+      localStorage.setItem('nova-profiles', JSON.stringify(cleaned));
+    } else {
+      setProfiles([]);
+      localStorage.setItem('nova-profiles', JSON.stringify([]));
     }
+
+    if (savedUser) {
+      const parsedUser = JSON.parse(savedUser);
+      setUser(parsedUser);
+      setTempUserName(parsedUser.name || '');
+      setTempUserEmail(parsedUser.email || '');
+    } else {
+      setTempUserName('Faisal Ahmed');
+      setTempUserEmail('faisal.ahmed@gmail.com');
+    }
+    
+    const savedGoogleClientId = localStorage.getItem('nova-google-client-id') || '';
+    setGoogleClientId(savedGoogleClientId);
+    setTempGoogleClientId(savedGoogleClientId);
     
     // Default load to homepage
     setUrl(savedHomepage);
@@ -584,6 +792,30 @@ export default function Home() {
     localStorage.setItem('nova-ai-apikey', key);
   };
 
+  const handleSaveConfiguration = () => {
+    const updatedUser: UserProfile = {
+      name: tempUserName.trim() || 'Faisal Ahmed',
+      email: tempUserEmail.trim() || 'faisal.ahmed@gmail.com',
+      avatarUrl: user?.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
+    };
+    setUser(updatedUser);
+    setAiProvider(tempAiProvider);
+    setAiModel(tempAiModel);
+    setAiApiKey(tempAiApiKey);
+    setGoogleClientId(tempGoogleClientId);
+
+    localStorage.setItem('nova-user', JSON.stringify(updatedUser));
+    localStorage.setItem('nova-ai-provider', tempAiProvider);
+    localStorage.setItem('nova-ai-model', tempAiModel);
+    localStorage.setItem('nova-ai-apikey', tempAiApiKey);
+    localStorage.setItem('nova-google-client-id', tempGoogleClientId);
+
+    setShowSaveSuccess(true);
+    setTimeout(() => {
+      setShowSaveSuccess(false);
+    }, 3000);
+  };
+
   const handleShowBookmarksChange = (val: boolean) => {
     setShowBookmarks(val);
     localStorage.setItem('nova-show-bookmarks', val.toString());
@@ -600,11 +832,27 @@ export default function Home() {
     return () => mediaQuery.removeEventListener('change', handleChange);
   }, [theme]);
 
+  // Handle URL hash changes to scroll to specific settings sections
+  useEffect(() => {
+    if (url.startsWith('nova://settings')) {
+      const hashIdx = url.indexOf('#');
+      if (hashIdx !== -1) {
+        const hash = url.slice(hashIdx + 1);
+        setTimeout(() => {
+          const el = document.getElementById(hash);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth' });
+          }
+        }, 150);
+      }
+    }
+  }, [url]);
+
   // Dynamic bounds sync or hide child native browser webview
   const syncWebviewBounds = () => {
     if (!viewportRef.current) return;
 
-    if (url.startsWith('nova://')) {
+    if (url.startsWith('nova://') || isNavigating) {
       // Collapse native viewport layout size to hide the native webview completely
       resizeBrowserWebview(0, 0, 0, 0);
       return;
@@ -613,11 +861,18 @@ export default function Home() {
     const rect = viewportRef.current.getBoundingClientRect();
     const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
     
-    // Scale logical client bounds to absolute physical screen pixels
+    // If a popover is open, we shrink the webview width from the right to expose the HTML layer.
+    // We add 56px to the offset to clear the persistent right sidebar and place the popover perfectly to its left.
+    const popoverWidth = activePopoverWidth;
+    const widthOffset = popoverWidth > 0 ? popoverWidth + 56 : 56;
+    const insetWidth = rect.width - widthOffset;
+
+    // Scale logical client bounds to absolute physical screen pixels.
+    // Keeping the top at rect.top ensures the webpage is never shifted vertically.
     resizeBrowserWebview(
       rect.left * dpr,
       rect.top * dpr,
-      rect.width * dpr,
+      insetWidth * dpr,
       rect.height * dpr
     );
   };
@@ -643,7 +898,14 @@ export default function Home() {
       observer.disconnect();
       window.removeEventListener('resize', syncWebviewBounds);
     };
-  }, [url]);
+  }, [url, isNavigating, isAgentSidebarOpen, activePopoverWidth]);
+
+  // Synchronize webview bounds instantly when popover width changes
+  useEffect(() => {
+    if (isTauri()) {
+      syncWebviewBounds();
+    }
+  }, [activePopoverWidth]);
 
   const startResizing = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -680,12 +942,115 @@ export default function Home() {
     const interval = setInterval(async () => {
       try {
         const activeUrl = await getPageUrl();
-        const activeTitle = await getPageTitle();
         
-        if (activeUrl && activeUrl !== url && !activeUrl.startsWith('nova://')) {
-          setUrl(activeUrl);
-          setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, url: activeUrl } : t));
-          addToHistory(activeTitle || activeUrl, activeUrl);
+        // Google OAuth Redirect Interceptor
+        if (activeUrl && activeUrl.includes('access_token=')) {
+          const match = activeUrl.match(/access_token=([^&]+)/);
+          if (match) {
+            const token = match[1];
+            
+            // 1. Immediately navigate webview away to prevent infinite poller loop
+            await navigateTo('https://www.google.com');
+            
+            // 2. Fetch profile from Google UserInfo endpoint
+            try {
+              const res = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo?access_token=${token}`);
+              if (res.ok) {
+                const data = await res.json();
+                const profile = {
+                  name: data.name || 'Google User',
+                  email: data.email || '',
+                  avatarUrl: data.picture || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(data.name || 'Google')}`
+                };
+                // 3. Login active profile locally & redirect browser frame back to settings page
+                handleLogin(profile);
+                handleNavigate('nova://settings');
+              }
+            } catch (err) {
+              console.error('Error retrieving Google Profile userinfo:', err);
+            }
+          }
+          return;
+        }
+
+        // Check if the URL contains our custom profile payload in the hash
+        if (activeUrl && activeUrl.includes('#NOVA_PROFILE:')) {
+          const hashIdx = activeUrl.indexOf('#NOVA_PROFILE:');
+          const profileJsonEncoded = activeUrl.slice(hashIdx + '#NOVA_PROFILE:'.length);
+          try {
+            const profileJson = decodeURIComponent(profileJsonEncoded);
+            const profile = JSON.parse(profileJson);
+            handleLogin(profile);
+            
+            // Clear the hash to prevent infinite loops
+            await evalJsInBrowser("window.location.hash = '';").catch(() => {});
+          } catch (e) {
+            console.error('Failed to parse NOVA_PROFILE payload from hash:', e);
+          }
+        }
+
+        const activeTitle = await getPageTitle();
+
+        // Run scraper if on a Google landing domain
+        if (activeUrl && (activeUrl.includes('myaccount.google.com') || activeUrl.includes('google.com'))) {
+          const scraperScript = `
+            (function() {
+              try {
+                if (window.location.hash && window.location.hash.includes("NOVA_PROFILE:")) return;
+                const profileLink = document.querySelector('a[href*="SignOutOptions"], [aria-label*="@"]');
+                if (profileLink) {
+                  const ariaLabel = profileLink.getAttribute('aria-label') || '';
+                  const atIdx = ariaLabel.indexOf('@');
+                  if (atIdx !== -1) {
+                    const openParenIdx = ariaLabel.lastIndexOf('(', atIdx);
+                    const closeParenIdx = ariaLabel.indexOf(')', atIdx);
+                    
+                    if (openParenIdx !== -1 && closeParenIdx !== -1) {
+                      const email = ariaLabel.slice(openParenIdx + 1, closeParenIdx).trim();
+                      let namePart = ariaLabel.slice(0, openParenIdx).trim();
+                      
+                      const colonIdx = namePart.indexOf(':');
+                      if (colonIdx !== -1) {
+                        namePart = namePart.slice(colonIdx + 1).trim();
+                      }
+                      
+                      const dashIdx = namePart.indexOf('-');
+                      if (dashIdx !== -1) {
+                        namePart = namePart.slice(dashIdx + 1).trim();
+                      }
+                      
+                      const name = namePart || 'Google User';
+                      const img = profileLink.querySelector('img');
+                      const avatarUrl = img ? img.src : '';
+                      
+                      const profile = {
+                        name: name,
+                        email: email,
+                        avatarUrl: avatarUrl || ('https://api.dicebear.com/7.x/initials/svg?seed=' + encodeURIComponent(name))
+                      };
+                      
+                      window.location.hash = "NOVA_PROFILE:" + encodeURIComponent(JSON.stringify(profile));
+                    }
+                  }
+                }
+              } catch (e) {
+                console.error("NOVA Scraper error:", e);
+              }
+            })()
+          `;
+          await evalJsInBrowser(scraperScript).catch(() => {});
+        }
+
+        // Clean displayUrl from any internal hash payloads
+        let displayUrl = activeUrl;
+        if (activeUrl && activeUrl.includes('#NOVA_PROFILE:')) {
+          displayUrl = activeUrl.split('#')[0];
+        }
+
+        if (displayUrl && displayUrl !== url && !displayUrl.startsWith('nova://')) {
+          setUrl(displayUrl);
+          setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, url: displayUrl } : t));
+          addToHistory(activeTitle || displayUrl, displayUrl);
         }
         if (activeTitle && activeTitle !== pageTitle) {
           setPageTitle(activeTitle);
@@ -716,6 +1081,10 @@ export default function Home() {
   // Add search query or URL navigation items to history list
   const addToHistory = (title: string, historyUrl: string) => {
     if (historyUrl.startsWith('nova://')) return;
+    
+    // Skip history tracking for incognito tabs
+    const activeTab = tabs.find(t => t.id === activeTabId);
+    if (activeTab?.isIncognito) return;
     
     setHistory(prev => {
       const filtered = prev.filter(item => item.url !== historyUrl);
@@ -757,7 +1126,10 @@ export default function Home() {
     const isUrl = targetUrl.match(/^(https?:\/\/)?([\da-z.-]+)\.([a-z.]{2,6})([/\w .-]*)*\/?$/) || targetUrl.startsWith('localhost:');
     let finalUrl = targetUrl;
     if (!isUrl) {
-      if (searchEngine === 'google') {
+      const activeTab = tabs.find(t => t.id === activeTabId);
+      if (activeTab?.isIncognito) {
+        finalUrl = `https://duckduckgo.com/?q=${encodeURIComponent(targetUrl)}`;
+      } else if (searchEngine === 'google') {
         finalUrl = `https://www.google.com/search?q=${encodeURIComponent(targetUrl)}`;
       } else if (searchEngine === 'bing') {
         finalUrl = `https://www.bing.com/search?q=${encodeURIComponent(targetUrl)}`;
@@ -973,38 +1345,77 @@ export default function Home() {
     }
   };
 
-  const handleLogin = () => {
-    const mockUser: UserProfile = {
-      name: 'Faisal Ahmed',
-      email: 'faisal.ahmed@gmail.com',
-      avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
-    };
-    setUser(mockUser);
-    localStorage.setItem('nova-user', JSON.stringify(mockUser));
+  const handleLogin = (profile: UserProfile) => {
+    setUser(profile);
+    setTempUserName(profile.name);
+    setTempUserEmail(profile.email);
+    localStorage.setItem('nova-user', JSON.stringify(profile));
+
+    // Save profile to the profiles database (except guest)
+    if (profile.email && profile.email !== 'guest.nova@gmail.com') {
+      setProfiles(prev => {
+        const filtered = prev.filter(p => p.email.toLowerCase() !== profile.email.toLowerCase());
+        const updated = [...filtered, profile];
+        localStorage.setItem('nova-profiles', JSON.stringify(updated));
+        return updated;
+      });
+    }
   };
 
   const handleLogout = () => {
     setUser(null);
+    setTempUserName('');
+    setTempUserEmail('');
     localStorage.removeItem('nova-user');
   };
 
+  const handleAddIncognitoTab = () => {
+    const newId = Math.random().toString();
+    const newTab: Tab = {
+      id: newId,
+      title: 'Incognito',
+      url: 'nova://incognito',
+      history: ['nova://incognito'],
+      historyIndex: 0,
+      isIncognito: true
+    };
+    setTabs(prev => [...prev, newTab]);
+    setActiveTabId(newId);
+    setUrl('nova://incognito');
+    setPageTitle('Incognito');
+    if (isTauri()) {
+      resizeBrowserWebview(0, 0, 0, 0); // Hide native browser overlay immediately
+    }
+  };
+
   // Chrome-like settings open tab logic
-  const handleOpenSettings = () => {
-    const existingSettingsTab = tabs.find(t => t.url === 'nova://settings');
+  const handleOpenSettings = (section?: string) => {
+    const existingSettingsTab = tabs.find(t => t.url.startsWith('nova://settings'));
+    const targetUrl = section ? `nova://settings#${section}` : 'nova://settings';
+    
     if (existingSettingsTab) {
+      setTabs(prev => prev.map(t => t.id === existingSettingsTab.id ? { ...t, url: targetUrl } : t));
       handleSwitchTab(existingSettingsTab.id);
+      
+      if (url.startsWith('nova://settings') && section) {
+        setUrl(targetUrl);
+        const el = document.getElementById(section);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth' });
+        }
+      }
     } else {
       const newId = Math.random().toString();
       const newTab: Tab = {
         id: newId,
         title: 'Settings',
-        url: 'nova://settings',
-        history: ['nova://settings'],
+        url: targetUrl,
+        history: [targetUrl],
         historyIndex: 0,
       };
       setTabs(prev => [...prev, newTab]);
       setActiveTabId(newId);
-      setUrl('nova://settings');
+      setUrl(targetUrl);
       setPageTitle('Settings');
       if (isTauri()) {
         resizeBrowserWebview(0, 0, 0, 0);
@@ -1577,6 +1988,237 @@ export default function Home() {
               </div>
             </div>
 
+            {/* Passwords and Autofill Section */}
+            <div id="autofill" className="flex flex-col gap-3 scroll-mt-6 border-t border-zinc-200/60 dark:border-zinc-800/80 pt-6">
+              <h2 className="font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
+                <Lock className="w-4 h-4 text-indigo-400" />
+                Passwords and Autofill
+              </h2>
+              <p className="text-xs text-zinc-500">Manage your saved passwords, payment methods, and addresses.</p>
+              
+              <div className="flex flex-col gap-4 p-4 rounded-2xl bg-zinc-100/50 dark:bg-zinc-900/40 border border-zinc-200/60 dark:border-zinc-800/60">
+                <div className="flex flex-col gap-2">
+                  <span className="text-[10px] font-black text-indigo-500 dark:text-indigo-400 uppercase tracking-wider">Saved Passwords</span>
+                  <div className="flex flex-col gap-1 mt-1">
+                    {[
+                      { site: 'google.com', username: user ? user.email : 'faisal.ahmed@gmail.com' },
+                      { site: 'github.com', username: 'faisal-dev' },
+                      { site: 'facebook.com', username: '+1234567890' }
+                    ].map((entry, idx) => (
+                      <div key={idx} className="flex items-center justify-between p-2.5 rounded-xl bg-white dark:bg-zinc-950 border border-zinc-200/65 dark:border-zinc-850/65">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-bold text-zinc-800 dark:text-zinc-100">{entry.site}</span>
+                          <span className="text-[10px] text-zinc-500">{entry.username}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => alert(`Password for ${entry.site} is: ••••••••••••`)}
+                            className="p-1.5 text-zinc-450 hover:text-indigo-550 dark:hover:text-indigo-400 transition-colors"
+                            title="Show password"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => alert(`Removed password for ${entry.site}`)}
+                            className="p-1.5 text-zinc-450 hover:text-red-500 transition-colors"
+                            title="Delete password"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* User Profile Settings */}
+            <div id="customize" className="flex flex-col gap-3 scroll-mt-6 border-t border-zinc-200/60 dark:border-zinc-800/80 pt-6">
+              <h2 className="font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
+                <Users className="w-4 h-4 text-indigo-400" />
+                User Profile Settings
+              </h2>
+              <p className="text-xs text-zinc-500">Customize your workspace name and identity.</p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-1 max-w-3xl">
+                {/* Form fields card */}
+                <div className="flex flex-col gap-4 p-4 rounded-2xl bg-zinc-150/40 dark:bg-zinc-900/40 border border-zinc-200/60 dark:border-zinc-800/60 transition-all">
+                  <span className="text-[10px] font-black text-indigo-500 dark:text-indigo-400 uppercase tracking-wider">Local Profile Identity</span>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Full Name</label>
+                    <input
+                      type="text"
+                      value={tempUserName}
+                      onChange={(e) => setTempUserName(e.target.value)}
+                      placeholder="e.g. Faisal Ahmed"
+                      className="w-full h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs focus:border-indigo-500 outline-hidden transition-all text-zinc-800 dark:text-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Email Address</label>
+                    <input
+                      type="email"
+                      value={tempUserEmail}
+                      onChange={(e) => setTempUserEmail(e.target.value)}
+                      placeholder="e.g. faisal.ahmed@gmail.com"
+                      className="w-full h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs focus:border-indigo-500 outline-hidden transition-all text-zinc-800 dark:text-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5 mt-1.5">
+                    <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Google OAuth Client ID</label>
+                    <input
+                      type="password"
+                      value={tempGoogleClientId}
+                      onChange={(e) => setTempGoogleClientId(e.target.value)}
+                      placeholder="Paste Google Client ID..."
+                      className="w-full h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs focus:border-indigo-500 outline-hidden transition-all text-zinc-800 dark:text-white font-mono"
+                    />
+                    <span className="text-[10px] text-zinc-500 leading-normal mt-0.5">
+                      Required for real Google account sign in. Set JavaScript Origin and Redirect URI to <code>http://localhost:3000</code> in Google Console.
+                    </span>
+                  </div>
+                </div>
+
+                {/* Google Connected card */}
+                <div id="sync" className="flex flex-col justify-between p-4 rounded-2xl bg-zinc-150/40 dark:bg-zinc-900/40 border border-zinc-200/60 dark:border-zinc-800/60 transition-all scroll-mt-6">
+                  {user ? (
+                    <div className="flex flex-col h-full justify-between gap-4">
+                      <div className="flex flex-col gap-2.5">
+                        <span className="text-[10px] font-black text-emerald-500 uppercase tracking-wider">Google Cloud Sync Active</span>
+                        <div className="flex items-center gap-3">
+                          {user.avatarUrl && user.avatarUrl.trim() !== '' ? (
+                            <img src={user.avatarUrl} alt="" className="w-10 h-10 rounded-full object-cover border border-zinc-200 dark:border-zinc-700 shadow-sm" />
+                          ) : (
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm uppercase ${getProfileColor(user.name)}`}>
+                              {getInitials(user.name)}
+                            </div>
+                          )}
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-xs font-black text-zinc-850 dark:text-white truncate">{user.name}</span>
+                            <span className="text-[10px] text-zinc-500 truncate">{user.email}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-1.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                          <span className="text-xs">✓</span>
+                          <span>Synced with Google OAuth Channel</span>
+                        </div>
+                        <button
+                          onClick={handleLogout}
+                          className="w-full py-2 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 border border-red-500/20 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          Disconnect Sync
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col h-full justify-between gap-4">
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-[10px] font-black text-zinc-450 uppercase tracking-wider">Google Sync Disconnected</span>
+                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed mt-0.5">
+                          Sign in with Google to synchronize your history, settings, and bookmarks instantly.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleNavigate('nova://signin')}
+                        className="w-full py-2.5 bg-[#4285F4] hover:bg-[#357ae8] text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-md shadow-blue-500/10 cursor-pointer"
+                      >
+                        <svg className="w-4 h-4" viewBox="0 0 24 24">
+                          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#FFFFFF" />
+                          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#FFFFFF" opacity="0.85" />
+                          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FFFFFF" opacity="0.85" />
+                          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#FFFFFF" opacity="0.85" />
+                        </svg>
+                        <span>Connect Google Account</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Manage Profiles Section */}
+            <div id="profiles" className="flex flex-col gap-3 scroll-mt-6 border-t border-zinc-200/60 dark:border-zinc-800/80 pt-6">
+              <h2 className="font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
+                <Users className="w-4 h-4 text-indigo-400" />
+                Manage Profiles
+              </h2>
+              <p className="text-xs text-zinc-500">Switch to, rename, or delete existing browser profiles.</p>
+              
+              <div className="flex flex-col gap-3 p-4 rounded-2xl bg-zinc-100/50 dark:bg-zinc-900/40 border border-zinc-200/60 dark:border-zinc-800/60">
+                <div className="flex flex-col gap-2">
+                  <span className="text-[10px] font-black text-indigo-500 dark:text-indigo-400 uppercase tracking-wider">Available Profiles</span>
+                  
+                  {profiles.length === 0 ? (
+                    <span className="text-xs text-zinc-500 italic py-2">No other profiles created.</span>
+                  ) : (
+                    <div className="flex flex-col gap-1.5 mt-1">
+                      {profiles.map((p, idx) => {
+                        const isActive = user && user.email.toLowerCase() === p.email.toLowerCase();
+                        return (
+                          <div key={idx} className={`flex items-center justify-between p-2.5 rounded-xl border ${isActive ? 'bg-indigo-600/5 border-indigo-500/20' : 'bg-white dark:bg-zinc-950 border-zinc-200/65 dark:border-zinc-850/65'}`}>
+                            <div className="flex items-center gap-3">
+                              {p.avatarUrl && p.avatarUrl.trim() !== '' ? (
+                                <img src={p.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover border border-zinc-200 dark:border-zinc-700" />
+                              ) : (
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs uppercase ${getProfileColor(p.name)}`}>
+                                  {getInitials(p.name)}
+                                </div>
+                              )}
+                              <div className="flex flex-col">
+                                <span className="text-xs font-bold text-zinc-800 dark:text-zinc-100 flex items-center gap-1.5">
+                                  {p.name}
+                                  {isActive && <span className="text-[8px] font-black text-emerald-500 uppercase tracking-wider bg-emerald-500/10 px-1 py-0.5 rounded">Active</span>}
+                                </span>
+                                <span className="text-[10px] text-zinc-500">{p.email}</span>
+                              </div>
+                            </div>
+                            
+                            <div className="flex items-center gap-2">
+                              {!isActive && (
+                                <button
+                                  onClick={() => handleLogin(p)}
+                                  className="px-2.5 py-1 bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800 text-[10.5px] font-bold text-zinc-700 dark:text-zinc-300 rounded-lg transition-colors border border-zinc-200 dark:border-zinc-800"
+                                >
+                                  Switch
+                                </button>
+                              )}
+                              <button
+                                onClick={() => {
+                                  if (isActive) {
+                                    handleLogout();
+                                  }
+                                  setProfiles(prev => {
+                                    const updated = prev.filter(item => item.email.toLowerCase() !== p.email.toLowerCase());
+                                    localStorage.setItem('nova-profiles', JSON.stringify(updated));
+                                    return updated;
+                                  });
+                                }}
+                                className="p-1.5 text-zinc-450 hover:text-red-500 transition-colors"
+                                title="Remove Profile"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                
+                <button
+                  onClick={() => handleNavigate('nova://signin')}
+                  className="mt-2 w-fit px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 cursor-pointer flex items-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add New Profile</span>
+                </button>
+              </div>
+            </div>
+
             {/* AI Omniscient Configuration */}
             <div className="flex flex-col gap-3">
               <h2 className="font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
@@ -1594,13 +2236,13 @@ export default function Home() {
                       <button
                         key={p}
                         onClick={() => {
-                          handleAiProviderChange(p);
-                          if (p === 'groq') handleAiModelChange('llama-3.3-70b-versatile');
-                          else if (p === 'openrouter') handleAiModelChange('meta-llama/llama-3.3-70b-instruct');
-                          else if (p === 'openai') handleAiModelChange('gpt-4o-mini');
+                          setTempAiProvider(p);
+                          if (p === 'groq') setTempAiModel('llama-3.3-70b-versatile');
+                          else if (p === 'openrouter') setTempAiModel('meta-llama/llama-3.3-70b-instruct');
+                          else if (p === 'openai') setTempAiModel('gpt-4o-mini');
                         }}
                         className={`px-4 py-2 rounded-xl text-xs font-semibold border transition-all ${
-                          aiProvider === p
+                          tempAiProvider === p
                             ? 'bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-600/10'
                             : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800'
                         }`}
@@ -1616,8 +2258,8 @@ export default function Home() {
                   <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Model</label>
                   <input
                     type="text"
-                    value={aiModel}
-                    onChange={(e) => handleAiModelChange(e.target.value)}
+                    value={tempAiModel}
+                    onChange={(e) => setTempAiModel(e.target.value)}
                     placeholder="e.g. llama-3.3-70b-versatile"
                     className="w-full max-w-md h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs focus:border-indigo-500 outline-hidden transition-all"
                   />
@@ -1628,18 +2270,36 @@ export default function Home() {
                   <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">API Key</label>
                   <input
                     type="password"
-                    value={aiApiKey}
-                    onChange={(e) => handleAiApiKeyChange(e.target.value)}
+                    value={tempAiApiKey}
+                    onChange={(e) => setTempAiApiKey(e.target.value)}
                     placeholder="sk-..."
                     className="w-full max-w-md h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs focus:border-indigo-500 outline-hidden transition-all font-mono"
                   />
                   <span className="text-[10px] text-zinc-500">
-                    {aiProvider === 'groq' && 'Get your key from console.groq.com'}
-                    {aiProvider === 'openrouter' && 'Get your key from openrouter.ai/keys'}
-                    {aiProvider === 'openai' && 'Get your key from platform.openai.com'}
+                    {tempAiProvider === 'groq' && 'Get your key from console.groq.com'}
+                    {tempAiProvider === 'openrouter' && 'Get your key from openrouter.ai/keys'}
+                    {tempAiProvider === 'openai' && 'Get your key from platform.openai.com'}
                   </span>
                 </div>
               </div>
+            </div>
+
+            {/* Save Button & Alert Status */}
+            <div className="flex items-center gap-4 border-t border-zinc-200/60 dark:border-zinc-800/80 pt-6">
+              <button
+                onClick={handleSaveConfiguration}
+                className="px-6 py-3 bg-gradient-to-r from-sky-500 via-indigo-500 to-purple-650 hover:opacity-95 active:scale-95 text-white text-xs font-extrabold uppercase tracking-wider rounded-xl transition-all shadow-md shadow-indigo-500/10 flex items-center gap-2 cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4 animate-pulse" />
+                Save Configurations
+              </button>
+
+              {showSaveSuccess && (
+                <div className="flex items-center gap-2 text-xs font-bold text-emerald-500 bg-emerald-500/10 border border-emerald-500/20 px-4 py-2.5 rounded-xl animate-in slide-in-from-left-2 duration-300">
+                  <span>✓</span>
+                  <span>Settings saved permanently.</span>
+                </div>
+              )}
             </div>
 
             {/* History and Bookmarks resets */}
@@ -1801,6 +2461,154 @@ export default function Home() {
       );
     }
 
+    if (url === 'nova://incognito') {
+      return (
+        <div className="w-full h-full bg-[#120f1a] text-[#ebdcfc] overflow-y-auto select-none px-4 py-12 md:p-16 transition-colors duration-300 relative animate-in fade-in duration-500">
+          <div className="max-w-2xl w-full mx-auto flex flex-col items-start gap-8 text-left">
+            {/* Spy Icon & Header */}
+            <div className="flex items-center gap-4 border-b border-purple-900/40 pb-6 w-full">
+              <div className="w-16 h-16 rounded-full bg-purple-950/60 border border-purple-800/40 flex items-center justify-center text-purple-400 shadow-xl shadow-purple-950/20">
+                <svg className="w-9 h-9 fill-current" viewBox="0 0 24 24">
+                  <path d="M12 2C9.5 2 7.4 3.7 6.8 6H17.2C16.6 3.7 14.5 2 12 2ZM2 10V12H22V10H2ZM6.5 14C4.6 14 3 15.6 3 17.5C3 19.4 4.6 21 6.5 21C8.1 21 9.5 19.9 9.9 18.4C10.5 18.7 11.2 18.9 12 18.9C12.8 18.9 13.5 18.7 14.1 18.4C14.5 19.9 15.9 21 17.5 21C19.4 21 21 19.4 21 17.5C21 15.6 19.4 14 17.5 14C15.9 14 14.5 15.1 14.1 16.6C13.5 16.3 12.8 16.1 12 16.1C11.2 16.1 10.5 16.3 9.9 16.6C9.5 15.1 8.1 14 6.5 14ZM6.5 15.5C7.6 15.5 8.5 16.4 8.5 17.5C8.5 18.6 7.6 19.5 6.5 19.5C5.4 19.5 4.5 18.6 4.5 17.5C4.5 16.4 5.4 15.5 6.5 15.5ZM17.5 15.5C18.6 15.5 19.5 16.4 19.5 17.5C19.5 18.6 18.6 19.5 17.5 19.5C16.4 19.5 15.5 18.6 15.5 17.5C15.5 16.4 16.4 15.5 17.5 15.5Z" />
+                </svg>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <h1 className="text-2xl font-black text-white tracking-tight">You've gone incognito</h1>
+                <p className="text-xs text-purple-300 font-medium">Now you can browse privately, and other people who use this device won't see your activity.</p>
+              </div>
+            </div>
+
+            {/* Explanation grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full mt-2">
+              <div className="flex flex-col gap-3">
+                <h2 className="text-sm font-extrabold text-white uppercase tracking-wider text-purple-300">What Incognito does</h2>
+                <p className="text-xs text-zinc-450 leading-relaxed">N.O.V.A. won't save the following information:</p>
+                <ul className="list-disc list-inside text-xs text-zinc-450 flex flex-col gap-2 pl-1.5 leading-relaxed">
+                  <li>Your browsing history on this device</li>
+                  <li>Cookies and site data</li>
+                  <li>Information entered in forms</li>
+                  <li>Search history and suggestions queries</li>
+                </ul>
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <h2 className="text-sm font-extrabold text-white uppercase tracking-wider text-purple-300">Your activity might still be visible to:</h2>
+                <ul className="list-disc list-inside text-xs text-zinc-450 flex flex-col gap-2 pl-1.5 leading-relaxed">
+                  <li>Websites you visit, including the ads and resources used on those sites</li>
+                  <li>Your employer or school administrator</li>
+                  <li>Your internet service provider (ISP)</li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Incognito Search Option */}
+            <div className="w-full mt-6 p-5 rounded-2xl bg-purple-950/15 border border-purple-800/20 flex flex-col gap-4">
+              <div className="flex flex-col gap-1">
+                <h3 className="text-xs font-extrabold text-white uppercase tracking-wider text-purple-300">Private Web Search</h3>
+                <p className="text-[11px] text-zinc-400">Search the web securely using DuckDuckGo private search engine directly from here:</p>
+              </div>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const val = (e.currentTarget.elements.namedItem('incognitoSearch') as HTMLInputElement).value;
+                  if (val.trim()) {
+                    handleNavigate(`https://duckduckgo.com/?q=${encodeURIComponent(val.trim())}`);
+                  }
+                }}
+                className="flex items-center w-full bg-[#1b1b24] border border-purple-900/30 rounded-xl p-1.5 pl-4 focus-within:border-purple-500/50 transition-colors"
+              >
+                <Search className="w-4 h-4 text-purple-400 mr-2.5" />
+                <input
+                  name="incognitoSearch"
+                  type="text"
+                  placeholder="Search privately on DuckDuckGo..."
+                  className="flex-grow bg-transparent text-xs text-white placeholder-zinc-500 outline-none"
+                  autoComplete="off"
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-purple-900/60 hover:bg-purple-800/60 text-purple-200 text-[10.5px] font-bold rounded-lg transition-colors border border-purple-800/30"
+                >
+                  Search
+                </button>
+              </form>
+            </div>
+
+          </div>
+        </div>
+      );
+    }
+
+    if (url === 'nova://signin') {
+      return (
+        <div className="w-full h-full bg-[#13131a] text-[#d1d1d6] overflow-y-auto select-none px-4 py-12 md:p-16 flex flex-col justify-between items-center relative animate-in fade-in duration-500">
+          {/* Top Left Back Navigation */}
+          <button
+            onClick={() => handleNavigate('nova://newtab')}
+            className="absolute top-6 left-6 p-2 rounded-full hover:bg-zinc-800/60 text-zinc-400 hover:text-white transition-all duration-200 flex items-center justify-center cursor-pointer"
+            title="Back to New Tab"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+
+          {/* Centered setup content */}
+          <div className="flex-grow flex flex-col items-center justify-center max-w-md w-full mx-auto text-center gap-8 my-auto">
+            {/* Round Avatar silhouette */}
+            <div className="relative">
+              <div className="absolute inset-0 bg-[#4285F4]/10 rounded-full blur-xl animate-pulse" />
+              <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-zinc-800 to-zinc-700 border-2 border-zinc-700 flex items-center justify-center text-zinc-400 relative z-10 shadow-xl shadow-black/30">
+                <User className="w-12 h-12 text-zinc-300" />
+              </div>
+            </div>
+
+            {/* Header & Sub-header */}
+            <div className="flex flex-col gap-2.5">
+              <h1 className="text-2xl font-black text-white tracking-tight">Set up your new N.O.V.A. profile</h1>
+              <p className="text-xs text-zinc-400 leading-relaxed max-w-sm">
+                Sign in to sync your history, settings, and bookmarks to your Google Account across all your devices.
+              </p>
+            </div>
+
+            {/* Capsule Buttons */}
+            <div className="flex flex-col gap-3 w-full max-w-xs mt-2">
+              <button
+                onClick={() => handleNavigate('https://accounts.google.com/')}
+                className="w-full py-3 bg-[#4285F4] hover:bg-[#357ae8] text-white rounded-full text-xs font-bold transition-all shadow-lg shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+              >
+                <svg className="w-4.5 h-4.5" viewBox="0 0 24 24">
+                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#FFFFFF" />
+                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#FFFFFF" opacity="0.85" />
+                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FFFFFF" opacity="0.85" />
+                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#FFFFFF" opacity="0.85" />
+                </svg>
+                <span>Sign in</span>
+              </button>
+
+              <button
+                onClick={() => handleNavigate('nova://newtab')}
+                className="w-full py-3 bg-[#1e1f20] hover:bg-[#282a2b] text-zinc-300 hover:text-white rounded-full text-xs font-bold transition-all border border-zinc-800 hover:border-zinc-700 hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+              >
+                Stay signed out
+              </button>
+            </div>
+          </div>
+
+          {/* Footer - Managed Profile banner */}
+          <div className="w-full max-w-sm border-t border-zinc-850/60 pt-6 mt-8 flex items-center justify-center gap-2.5 text-zinc-500 select-none">
+            <svg className="w-4.5 h-4.5 text-zinc-600" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+              <path d="M22 10v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V10" />
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M6 17v-3" />
+              <path d="M10 17v-4" />
+              <path d="M14 17v-3" />
+              <path d="M18 17v-4" />
+            </svg>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-center">N.O.V.A. Account Setup Profile</span>
+          </div>
+        </div>
+      );
+    }
+
     return null;
   };
 
@@ -1831,6 +2639,17 @@ export default function Home() {
         user={user}
         onLogin={handleLogin}
         onLogout={handleLogout}
+        profiles={profiles}
+        onPopoverWidthChange={setActivePopoverWidth}
+        onAddIncognitoTab={handleAddIncognitoTab}
+        showGoogleLoginModal={showGoogleLoginModal}
+        setShowGoogleLoginModal={setShowGoogleLoginModal}
+        googleClientId={googleClientId}
+        onGoogleClientIdChange={(id) => {
+          setGoogleClientId(id);
+          setTempGoogleClientId(id);
+          localStorage.setItem('nova-google-client-id', id);
+        }}
         isAgentSidebarOpen={isAgentSidebarOpen}
         onToggleAgentSidebar={() => setIsAgentSidebarOpen(prev => !prev)}
         onAddTabToRight={handleAddTabToRight}
@@ -1852,11 +2671,65 @@ export default function Home() {
           {url.startsWith('nova://') ? (
             renderInternalPage()
           ) : (
-            isNavigating && (
-              <div className="absolute inset-0 flex items-center justify-center bg-[#13131a]/40 backdrop-blur-xs z-50">
-                <div className="w-8.5 h-8.5 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-              </div>
-            )
+            <>
+              {/* Shimmer Skeleton Loader (Shown during website navigation) */}
+              {isNavigating && (
+                <div className="absolute inset-0 bg-[#0f0f12] flex flex-col p-8 z-40 animate-in fade-in duration-300">
+                  {/* Simulated Website Header / Nav Bar */}
+                  <div className="w-full flex items-center justify-between border-b border-zinc-800/40 pb-5 mb-8">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-zinc-800/40 animate-pulse" />
+                      <div className="flex flex-col gap-1.5">
+                        <div className="w-28 h-3.5 rounded bg-zinc-850 animate-pulse" />
+                        <div className="w-16 h-2 rounded bg-zinc-900 animate-pulse" />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="w-14 h-6 rounded-lg bg-zinc-855 animate-pulse" />
+                      <div className="w-14 h-6 rounded-lg bg-zinc-855 animate-pulse" />
+                    </div>
+                  </div>
+
+                  {/* Simulated Website Hero / Main Content */}
+                  <div className="flex-grow flex flex-col gap-6 max-w-3xl w-full mx-auto justify-center">
+                    <div className="w-fit h-5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400/70 text-[9px] font-bold uppercase tracking-wider px-3 py-1 animate-pulse">
+                      Orchestrating...
+                    </div>
+                    <div className="flex flex-col gap-3">
+                      <div className="w-[85%] h-9 rounded-xl bg-gradient-to-r from-zinc-850 via-zinc-800 to-zinc-850 bg-[length:200%_100%] animate-[shimmer_1.5s_infinite] shimmer" />
+                      <div className="w-[60%] h-9 rounded-xl bg-gradient-to-r from-zinc-850 via-zinc-800 to-zinc-850 bg-[length:200%_100%] animate-[shimmer_1.5s_infinite] shimmer" />
+                    </div>
+                    <div className="flex flex-col gap-2.5 mt-4">
+                      <div className="w-full h-3 rounded bg-zinc-850 animate-pulse" />
+                      <div className="w-[95%] h-3 rounded bg-zinc-850 animate-pulse" />
+                      <div className="w-[90%] h-3 rounded bg-zinc-850 animate-pulse" />
+                      <div className="w-[80%] h-3 rounded bg-zinc-850 animate-pulse" />
+                    </div>
+                    
+                    {/* Decorative shimmer blocks */}
+                    <div className="grid grid-cols-3 gap-4 mt-8">
+                      <div className="h-28 rounded-2xl bg-zinc-850/40 border border-zinc-800/30 p-4 flex flex-col justify-between animate-pulse">
+                        <div className="w-8 h-8 rounded-lg bg-zinc-800" />
+                        <div className="w-12 h-2 rounded bg-zinc-800" />
+                      </div>
+                      <div className="h-28 rounded-2xl bg-zinc-850/40 border border-zinc-800/30 p-4 flex flex-col justify-between animate-pulse">
+                        <div className="w-8 h-8 rounded-lg bg-zinc-800" />
+                        <div className="w-12 h-2 rounded bg-zinc-800" />
+                      </div>
+                      <div className="h-28 rounded-2xl bg-zinc-850/40 border border-zinc-800/30 p-4 flex flex-col justify-between animate-pulse">
+                        <div className="w-8 h-8 rounded-lg bg-zinc-800" />
+                        <div className="w-12 h-2 rounded bg-zinc-800" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Gutter background overlay for webview spacer */}
+              <div 
+                className="absolute top-0 bottom-0 right-0 w-[56px] bg-[#0c0c10] border-l border-zinc-900/60 z-10"
+              />
+            </>
           )}
 
           {/* Floating Sidebar Shortcuts Overlay — hidden on mobile (hydration-safe: gated by isMounted) */}
@@ -1927,7 +2800,7 @@ export default function Home() {
 
               {/* Floating Settings Shortcut Button */}
               <button
-                onClick={handleOpenSettings}
+                onClick={() => handleOpenSettings()}
                 className="w-10 h-10 rounded-full hover:bg-[#ea4335]/15 flex items-center justify-center transition-all duration-200 text-[#ea4335] hover:scale-115 active:scale-95"
                 title="Settings"
               >
@@ -1941,10 +2814,10 @@ export default function Home() {
         {isMounted && !isMobile && (
           <div 
             style={{ 
-              width: isAgentSidebarOpen ? `${agentSidebarWidth}px` : '30px',
+              width: isAgentSidebarOpen ? `${agentSidebarWidth}px` : '0px',
               borderLeftWidth: isAgentSidebarOpen ? '1px' : '0px',
             }}
-            className="h-full flex-shrink-0 bg-[#0f0f12] border-zinc-800/50 flex flex-col relative select-none z-35 shadow-2xl backdrop-blur-xl transition-all duration-300 ease-in-out overflow-visible"
+            className="h-full flex-shrink-0 bg-[#0f0f12] border-zinc-800/60 flex flex-col relative select-none z-35 shadow-2xl backdrop-blur-xl transition-all duration-300 ease-in-out overflow-visible"
           >
             {/* Resize handle (only when open) */}
             {isAgentSidebarOpen && (
@@ -1954,43 +2827,54 @@ export default function Home() {
               />
             )}
 
-            {/* Google Gemini-Style Vertical Curved Toggle Handle Tab */}
+            {/* 3-Trigger Integrated Icons Bar (Positioned outside on the left - Centered & fits exactly inside the 56px gutter) */}
             <div 
-              onClick={() => setIsAgentSidebarOpen(!isAgentSidebarOpen)}
-              className="absolute top-[40%] left-0 w-[30px] h-[140px] group cursor-pointer z-50 select-none transition-all hover:scale-105 active:scale-95"
-              title={isAgentSidebarOpen ? "Hide Copilot" : "Show Copilot"}
+              style={{
+                left: '-55px',
+                width: '56px',
+                height: '240px',
+              }}
+              className="absolute top-1/2 -translate-y-1/2 flex flex-col justify-between items-center py-4 bg-[#0f0f12] border-l border-t border-b border-zinc-800/60 rounded-l-[20px] z-50 select-none"
             >
-              <svg 
-                width="30" 
-                height="140" 
-                viewBox="0 0 30 140" 
-                fill="none" 
-                xmlns="http://www.w3.org/2000/svg"
-                className="drop-shadow-[0_4px_12px_rgba(0,0,0,0.55)]"
+              {/* Top Trigger: Placeholder */}
+              <button
+                type="button"
+                onClick={() => alert('AI Features (Coming Soon!)')}
+                className="p-2.5 text-zinc-400 hover:text-[#a0c3ff] hover:bg-zinc-800/40 rounded-xl transition-all duration-200 cursor-pointer group"
+                title="AI Assistance"
               >
-                {/* Clean filled organic curve matching sidebar bg */}
-                <path 
-                  d="M30 0 C30 20 2 30 2 70 C2 110 30 120 30 140 Z" 
-                  fill="#0f0f12" 
-                />
-                {/* Border line on the left curved edge ONLY (right edge has no line to merge seamlessly) */}
-                <path 
-                  d="M30 0 C30 20 2 30 2 70 C2 110 30 120 30 140" 
-                  stroke="#2d2d39" 
-                  strokeWidth="1.5"
-                />
-              </svg>
-              {/* Pulsing Bot Agent Icon in place of Arrow */}
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none pl-1">
-                <Bot className="w-5 h-5 text-indigo-400 group-hover:text-indigo-300 transition-colors animate-pulse" strokeWidth={2.2} />
-              </div>
+                <Sparkles className="w-[24px] h-[24px] text-indigo-400 group-hover:animate-pulse" />
+              </button>
+
+              {/* Middle Trigger: Sidebar Toggle */}
+              <button
+                type="button"
+                onClick={() => setIsAgentSidebarOpen(!isAgentSidebarOpen)}
+                className="p-2.5 bg-gradient-to-tr from-[#ea4335]/10 via-[#ee2a7b]/10 to-[#6228d7]/10 border border-indigo-500/20 hover:border-indigo-500/40 hover:bg-zinc-800/40 text-white rounded-xl transition-all duration-300 hover:scale-110 active:scale-95 cursor-pointer"
+                title={isAgentSidebarOpen ? "Hide Copilot" : "Show Copilot"}
+              >
+                {isAgentSidebarOpen ? (
+                  <ChevronRight className="w-[26px] h-[26px] text-indigo-400" strokeWidth={2.5} />
+                ) : (
+                  <ChevronLeft className="w-[26px] h-[26px] text-indigo-400" strokeWidth={2.5} />
+                )}
+              </button>
+
+              {/* Bottom Trigger: Placeholder */}
+              <button
+                type="button"
+                onClick={() => alert('Quick Actions (Coming Soon!)')}
+                className="p-2.5 text-zinc-400 hover:text-white hover:bg-zinc-800/40 rounded-xl transition-all duration-200 cursor-pointer group"
+                title="Settings"
+              >
+                <Settings className="w-[24px] h-[24px] text-zinc-400 group-hover:rotate-45 transition-transform duration-300" />
+              </button>
             </div>
 
-            {/* Fixed width inner container shifted to the right of the handle to prevent overlaps */}
+            {/* Content container occupying the full sidebar width without margins */}
             {isAgentSidebarOpen && (
               <div 
-                style={{ width: `${agentSidebarWidth - 30}px`, marginLeft: '30px' }} 
-                className="h-full flex flex-col overflow-hidden"
+                className="h-full w-full flex flex-col overflow-hidden"
               >
                 {showHistory ? (
                   /* --- CHAT HISTORY PANEL LAYOUT --- */
@@ -2050,21 +2934,10 @@ export default function Home() {
                   </div>
                 ) : (
                   /* --- ACTIVE CHAT PANEL LAYOUT --- */
-                  <div className="h-full flex flex-col overflow-hidden">
+                  <div className="h-full flex flex-col overflow-hidden bg-[#0f0f12]">
                     {/* Header */}
-                    <div className="flex items-center justify-between px-4 py-3 bg-[#0f0f12] border-b border-zinc-900/60">
-                      <div className="flex items-center gap-2.5">
-                        <div className="p-1.5 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/10">
-                          <Bot className="w-4 h-4" />
-                        </div>
-                        <div className="flex flex-col text-left">
-                          <span className="text-[11.5px] font-extrabold text-white tracking-wide bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent font-sans">N.O.V.A. Copilot</span>
-                          <div className="flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                            <span className="text-[8px] text-zinc-500 font-bold uppercase tracking-wider">Active</span>
-                          </div>
-                        </div>
-                      </div>
+                    <div className="flex items-center justify-between px-3 py-2 bg-[#0f0f12] border-b border-zinc-900/60 flex-shrink-0">
+                      <AgentStatus state={agentState} />
                       
                       <div className="flex items-center gap-1.5">
                         <button
@@ -2072,7 +2945,7 @@ export default function Home() {
                           className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition-all cursor-pointer"
                           title="View Saved Chats"
                         >
-                          <RotateCcw className="w-4 h-4" />
+                          <RotateCcw className="w-3.5 h-3.5" />
                         </button>
 
                         <button
@@ -2086,35 +2959,63 @@ export default function Home() {
                       </div>
                     </div>
 
+                    {/* Google Gemini style premium horizontal slide loader */}
+                    {isAgentTyping && (
+                      <div className="w-full h-[2px] bg-zinc-900/80 relative overflow-hidden flex-shrink-0">
+                        <div className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-sky-400 via-indigo-500 to-purple-500 animate-[loading-slide_1.8s_infinite] w-[40%] rounded-full shadow-[0_0_8px_rgba(99,102,241,0.5)]" />
+                      </div>
+                    )}
+
                     {/* Chat Messages Container */}
                     <div className="flex-grow overflow-y-auto p-4 flex flex-col gap-6 no-scrollbar bg-[#0f0f12]">
                       {agentMessages.map((msg) => (
                         <div 
                           key={msg.id}
-                          className={`flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-300 ${
+                          className={`flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-350 ${
                             msg.sender === 'user' ? 'items-end' : 'items-start'
                           }`}
                         >
                           {msg.sender === 'agent' ? (
-                            /* Agent Message: Raw text directly on background canvas */
+                            /* Agent Message: Gemini-Style inline layout without cards */
                             <div className="w-full text-left">
-                              <div className="flex gap-2 items-center mb-1.5 text-zinc-400 text-[10px] font-bold">
-                                <div className="p-1 rounded-lg bg-gradient-to-r from-blue-500/10 via-indigo-500/10 to-purple-500/10 text-indigo-400 border border-indigo-500/15">
-                                  <Sparkles className="w-3 h-3 text-indigo-400" />
+                              <div className="flex gap-2 items-center mb-1.5 text-zinc-400 text-[10px] font-bold select-none">
+                                <div className="p-1 rounded-lg bg-gradient-to-tr from-sky-500/10 via-indigo-500/10 to-purple-500/10 text-indigo-400 border border-indigo-500/15">
+                                  <Sparkles className="w-3 h-3 text-indigo-450 animate-pulse" />
                                 </div>
-                                <span className="bg-gradient-to-r from-blue-300 to-indigo-300 bg-clip-text text-transparent font-extrabold uppercase tracking-wider">N.O.V.A. Copilot</span>
+                                <span className="bg-gradient-to-r from-sky-300 via-indigo-300 to-purple-300 bg-clip-text text-transparent font-extrabold uppercase tracking-wider">N.O.V.A. Brain</span>
                               </div>
-                              <div className="pl-6 text-[11.5px] text-zinc-200 leading-relaxed select-text font-sans">
+                              <div className="pl-7 text-[11.5px] text-zinc-200 leading-relaxed select-text font-sans font-medium">
                                 {renderMessageContent(msg.content)}
                               </div>
-                              <span className="block text-[7.5px] text-zinc-650 font-bold uppercase mt-1 pl-6 tracking-wide select-none">
+                              
+                              {/* Renders parsed structural action items using ActionCard */}
+                              {msg.actions && msg.actions.length > 0 && (
+                                <div className="flex flex-col gap-2.5 mt-3.5 pl-7 w-full max-w-full animate-in fade-in duration-300">
+                                  {msg.actions.map((action, index) => (
+                                    <ActionCard key={action.id} action={action} index={index} />
+                                  ))}
+                                  
+                                  {/* Simulated Playback Runner Trigger */}
+                                  {msg.actions.some(a => a.status === 'pending') && (
+                                    <button
+                                      onClick={() => handleSimulateExecution(msg.id)}
+                                      className="mt-2 w-full py-2.5 px-3 bg-gradient-to-r from-sky-500 via-indigo-500 to-purple-600 hover:opacity-90 active:scale-[0.98] text-white font-extrabold text-[10px] uppercase tracking-wider rounded-xl shadow-lg shadow-indigo-600/15 transition-all select-none cursor-pointer flex items-center justify-center gap-1.5 border border-indigo-500/25"
+                                    >
+                                      <Sparkles className="w-3 h-3 animate-spin [animation-duration:3s]" />
+                                      <span>Simulate Execution (Phase 2)</span>
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+
+                              <span className="block text-[7.5px] text-zinc-650 font-bold uppercase mt-1.5 pl-7 tracking-wide select-none">
                                 {new Date(msg.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
                               </span>
                             </div>
                           ) : (
-                            /* User Message: Clean dark grey pill aligned to the right */
+                            /* User Message: Minimal rounded capsule aligned to the right */
                             <div className="max-w-[85%] text-right">
-                              <div className="p-3 bg-[#1e1f20] border border-zinc-800/40 rounded-[20px] text-[11.5px] text-[#e3e3e3] text-left leading-relaxed font-sans font-medium shadow-sm">
+                              <div className="p-3 bg-[#1e1f20] border border-zinc-800/40 rounded-[20px] text-[11.5px] text-[#e3e3e3] text-left leading-relaxed font-sans font-medium shadow-sm hover:border-zinc-700/40 transition-colors">
                                 {renderMessageContent(msg.content)}
                               </div>
                               <span className="block text-[7.5px] text-zinc-650 font-bold uppercase mt-1 mr-2 tracking-wide select-none">

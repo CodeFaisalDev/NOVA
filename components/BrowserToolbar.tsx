@@ -20,7 +20,12 @@ import {
   Menu,
   ChevronRight,
   Layers,
-  Bot
+  Bot,
+  Key,
+  Pencil,
+  UserPlus,
+  UserCheck,
+  User
 } from 'lucide-react';
 import { getGoogleSuggestions } from '@/lib/ipc';
 
@@ -30,6 +35,7 @@ interface Tab {
   url: string;
   history: string[];
   historyIndex: number;
+  isIncognito?: boolean;
 }
 
 interface Bookmark {
@@ -54,7 +60,7 @@ interface BrowserToolbarProps {
   pageTitle: string;
   isNavigating: boolean;
   onNavigate: (targetUrl: string) => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (section?: string) => void;
   onBack?: () => void;
   onForward?: () => void;
   onRefresh?: () => void;
@@ -78,8 +84,16 @@ interface BrowserToolbarProps {
 
   // User Profile
   user: UserProfile | null;
-  onLogin: () => void;
+  onLogin: (profile: UserProfile) => void;
   onLogout: () => void;
+  onAddIncognitoTab?: () => void;
+  profiles?: UserProfile[];
+
+  // Google Login modal control
+  showGoogleLoginModal?: boolean;
+  setShowGoogleLoginModal?: (show: boolean) => void;
+  googleClientId?: string;
+  onGoogleClientIdChange?: (id: string) => void;
 
   // Agent Sidebar controls
   isAgentSidebarOpen?: boolean;
@@ -91,7 +105,32 @@ interface BrowserToolbarProps {
   onCloseOtherTabs?: (id: string) => void;
   onCloseTabsToRight?: (id: string) => void;
   onCloseTabsToLeft?: (id: string) => void;
+  onPopoverWidthChange?: (width: number) => void;
 }
+
+const getInitials = (name: string): string => {
+  if (!name) return '?';
+  return name.trim().charAt(0).toUpperCase();
+};
+
+const getProfileColor = (name: string): string => {
+  const colors = [
+    'bg-red-650 text-white',
+    'bg-purple-650 text-white',
+    'bg-blue-650 text-white',
+    'bg-emerald-650 text-white',
+    'bg-amber-650 text-white',
+    'bg-pink-650 text-white',
+    'bg-indigo-650 text-white',
+    'bg-cyan-650 text-white',
+  ];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const index = Math.abs(hash) % colors.length;
+  return colors[index];
+};
 
 export default function BrowserToolbar({
   url,
@@ -116,6 +155,11 @@ export default function BrowserToolbar({
   user,
   onLogin,
   onLogout,
+  onAddIncognitoTab,
+  showGoogleLoginModal,
+  setShowGoogleLoginModal,
+  googleClientId = '',
+  onGoogleClientIdChange,
   isAgentSidebarOpen = false,
   onToggleAgentSidebar,
   onAddTabToRight,
@@ -123,10 +167,67 @@ export default function BrowserToolbar({
   onCloseOtherTabs,
   onCloseTabsToRight,
   onCloseTabsToLeft,
+  profiles = [],
+  onPopoverWidthChange,
 }: BrowserToolbarProps) {
   const [inputUrl, setInputUrl] = useState(url);
-  const [showProfilePopover, setShowProfilePopover] = useState(false);
-  const [activeUtilityPopover, setActiveUtilityPopover] = useState<'adblock' | 'wallet' | 'extensions' | 'apps' | null>(null);
+  const [activePopover, setActivePopover] = useState<'profile' | 'menu' | 'adblock' | 'wallet' | 'extensions' | 'apps' | null>(null);
+  const showProfilePopover = activePopover === 'profile';
+  const showMenuPopover = activePopover === 'menu';
+  const activeUtilityPopover = (activePopover === 'adblock' || activePopover === 'wallet' || activePopover === 'extensions' || activePopover === 'apps') ? activePopover : null;
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  const [failedProfileImages, setFailedProfileImages] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [user]);
+  
+  const [internalShowGoogleLoginModal, setInternalShowGoogleLoginModal] = useState(false);
+  const isGoogleLoginModalOpen = showGoogleLoginModal !== undefined ? showGoogleLoginModal : internalShowGoogleLoginModal;
+  const setIsGoogleLoginModalOpen = setShowGoogleLoginModal !== undefined ? setShowGoogleLoginModal : setInternalShowGoogleLoginModal;
+
+  const [googleLoginStep, setGoogleLoginStep] = useState<'select' | 'custom' | 'loading' | 'success' | 'oauth'>('select');
+  const [googleCustomName, setGoogleCustomName] = useState('');
+  const [googleCustomEmail, setGoogleCustomEmail] = useState('');
+  const [localClientId, setLocalClientId] = useState(googleClientId || '');
+
+  useEffect(() => {
+    if (isGoogleLoginModalOpen) {
+      setLocalClientId(googleClientId);
+    }
+  }, [isGoogleLoginModalOpen, googleClientId]);
+
+  const [selectedProfile, setSelectedProfile] = useState<UserProfile | null>(null);
+
+  const updatePopoverWidth = (popover: 'profile' | 'menu' | 'adblock' | 'wallet' | 'extensions' | 'apps' | null) => {
+    let width = 0;
+    if (popover === 'profile') width = 320;
+    else if (popover === 'menu') width = 224;
+    else if (popover === 'adblock') width = 224;
+    else if (popover === 'extensions') width = 224;
+    else if (popover === 'apps') width = 224;
+
+    if (onPopoverWidthChange) {
+      onPopoverWidthChange(width);
+    }
+  };
+
+  const setAndNotifyActivePopover = (val: 'profile' | 'menu' | 'adblock' | 'wallet' | 'extensions' | 'apps' | null) => {
+    setActivePopover(val);
+    updatePopoverWidth(val);
+  };
+
+  const setShowProfilePopover = (val: boolean) => {
+    setAndNotifyActivePopover(val ? 'profile' : null);
+  };
+
+  const setShowMenuPopover = (val: boolean) => {
+    setAndNotifyActivePopover(val ? 'menu' : null);
+  };
+
+  const setActiveUtilityPopover = (val: 'adblock' | 'wallet' | 'extensions' | 'apps' | null) => {
+    setAndNotifyActivePopover(val);
+  };
   
   // Autocomplete / Search suggestions state
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
@@ -259,6 +360,7 @@ export default function BrowserToolbar({
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       setShowProfilePopover(false);
+      setShowMenuPopover(false);
       setActiveUtilityPopover(null);
       setContextMenu(null);
       // Only close suggestions if click is OUTSIDE both address bar forms
@@ -330,7 +432,7 @@ export default function BrowserToolbar({
   };
 
   return (
-    <div className="flex flex-col w-full bg-[#13131a] select-none z-30">
+    <div className="relative flex flex-col w-full bg-[#13131a] select-none z-50">
       
       {/* 1. Tab Bar Header Row */}
       <div data-tauri-drag-region className="flex items-center justify-between px-3 h-12 bg-[#0c0c10] border-b border-zinc-950">
@@ -422,12 +524,16 @@ export default function BrowserToolbar({
                     }}
                     className={`group relative flex items-center gap-2.5 px-3.5 h-[34px] rounded-lg text-xs font-semibold flex-1 min-w-[38px] max-w-[172px] shrink truncate cursor-pointer transition-all duration-200 my-auto ${
                       isActive 
-                        ? 'bg-[#13131a] text-white shadow-sm' 
-                        : 'bg-transparent hover:bg-white/5 text-zinc-400 hover:text-zinc-200'
+                        ? (tab.isIncognito ? 'bg-purple-950/40 text-purple-200 border border-purple-800/40 shadow-sm' : 'bg-[#13131a] text-white shadow-sm') 
+                        : (tab.isIncognito ? 'bg-transparent hover:bg-purple-950/15 text-purple-400/80 hover:text-purple-300' : 'bg-transparent hover:bg-white/5 text-zinc-400 hover:text-zinc-200')
                     } ${isNew ? 'tab-animate-open tab-animate-glow' : ''} ${isClosing ? 'tab-animate-close' : ''}`}
                   >
                     {isActive && isNavigating ? (
                       <div className="w-3.5 h-3.5 border-2 border-[#ea4335] border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                    ) : tab.isIncognito ? (
+                      <svg className="w-3.5 h-3.5 flex-shrink-0 text-purple-450 fill-current" viewBox="0 0 24 24">
+                        <path d="M12 2C9.5 2 7.4 3.7 6.8 6H17.2C16.6 3.7 14.5 2 12 2ZM2 10V12H22V10H2ZM6.5 14C4.6 14 3 15.6 3 17.5C3 19.4 4.6 21 6.5 21C8.1 21 9.5 19.9 9.9 18.4C10.5 18.7 11.2 18.9 12 18.9C12.8 18.9 13.5 18.7 14.1 18.4C14.5 19.9 15.9 21 17.5 21C19.4 21 21 19.4 21 17.5C21 15.6 19.4 14 17.5 14C15.9 14 14.5 15.1 14.1 16.6C13.5 16.3 12.8 16.1 12 16.1C11.2 16.1 10.5 16.3 9.9 16.6C9.5 15.1 8.1 14 6.5 14ZM6.5 15.5C7.6 15.5 8.5 16.4 8.5 17.5C8.5 18.6 7.6 19.5 6.5 19.5C5.4 19.5 4.5 18.6 4.5 17.5C4.5 16.4 5.4 15.5 6.5 15.5ZM17.5 15.5C18.6 15.5 19.5 16.4 19.5 17.5C19.5 18.6 18.6 19.5 17.5 19.5C16.4 19.5 15.5 18.6 15.5 17.5C15.5 16.4 16.4 15.5 17.5 15.5Z" />
+                      </svg>
                     ) : favicon ? (
                       <img src={favicon} alt="" className="w-3.5 h-3.5 rounded-xs flex-shrink-0 object-contain" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                     ) : (
@@ -521,24 +627,37 @@ export default function BrowserToolbar({
 
         {/* URL Address Bar Form — full-width on all sizes, max-width on desktop */}
         <form ref={addressBarRef} onSubmit={handleSubmit} className="flex-grow max-w-full md:max-w-[65%] relative">
-          <div className="relative flex items-center w-full group">
-            {/* Left inside: N.O.V.A logo favicon (or Globe) */}
-            <div className="absolute left-3 flex items-center transition-colors">
-              <svg className="w-4 h-4 mr-1 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
-                <circle cx="12" cy="12" r="10" className="text-[#ea4335]" />
-                <circle cx="12" cy="12" r="4.5" className="text-white" />
-              </svg>
-            </div>
+          {(() => {
+            const activeTab = tabs.find(t => t.id === activeTabId);
+            const isIncognitoActive = activeTab?.isIncognito;
+            return (
+              <div className="relative flex items-center w-full group">
+                {/* Left inside: N.O.V.A logo favicon (or Globe) or Incognito badge */}
+                <div className="absolute left-3 flex items-center transition-colors">
+                  {isIncognitoActive ? (
+                    <div className="flex items-center gap-1 bg-purple-950/60 border border-purple-800/60 text-purple-300 rounded-full px-2.5 py-0.5 text-[8.5px] font-black uppercase tracking-wider select-none animate-in fade-in duration-300">
+                      <svg className="w-3 h-3 fill-current text-purple-400" viewBox="0 0 24 24">
+                        <path d="M12 2C9.5 2 7.4 3.7 6.8 6H17.2C16.6 3.7 14.5 2 12 2ZM2 10V12H22V10H2ZM6.5 14C4.6 14 3 15.6 3 17.5C3 19.4 4.6 21 6.5 21C8.1 21 9.5 19.9 9.9 18.4C10.5 18.7 11.2 18.9 12 18.9C12.8 18.9 13.5 18.7 14.1 18.4C14.5 19.9 15.9 21 17.5 21C19.4 21 21 19.4 21 17.5C21 15.6 19.4 14 17.5 14C15.9 14 14.5 15.1 14.1 16.6C13.5 16.3 12.8 16.1 12 16.1C11.2 16.1 10.5 16.3 9.9 16.6C9.5 15.1 8.1 14 6.5 14ZM6.5 15.5C7.6 15.5 8.5 16.4 8.5 17.5C8.5 18.6 7.6 19.5 6.5 19.5C5.4 19.5 4.5 18.6 4.5 17.5C4.5 16.4 5.4 15.5 6.5 15.5ZM17.5 15.5C18.6 15.5 19.5 16.4 19.5 17.5C19.5 18.6 18.6 19.5 17.5 19.5C16.4 19.5 15.5 18.6 15.5 17.5C15.5 16.4 16.4 15.5 17.5 15.5Z" />
+                      </svg>
+                      <span className="tracking-widest">Private</span>
+                    </div>
+                  ) : (
+                    <svg className="w-4 h-4 mr-1 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                      <circle cx="12" cy="12" r="10" className="text-[#ea4335]" />
+                      <circle cx="12" cy="12" r="4.5" className="text-white" />
+                    </svg>
+                  )}
+                </div>
 
-            <input
-              type="text"
-              value={inputUrl}
-              onChange={(e) => setInputUrl(e.target.value)}
-              onFocus={() => setIsInputFocused(true)}
-              onKeyDown={handleKeyDown}
-              placeholder="Search or type a URL"
-              className="w-full h-8.5 pl-9 pr-18 text-[12.5px] font-bold rounded-full border border-zinc-800/80 bg-[#0f0f14] hover:border-zinc-700/80 focus:border-zinc-600 focus:bg-[#0f0f14] text-white placeholder-zinc-500 outline-none transition-all"
-            />
+                <input
+                  type="text"
+                  value={inputUrl}
+                  onChange={(e) => setInputUrl(e.target.value)}
+                  onFocus={() => setIsInputFocused(true)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Search or type a URL"
+                  className={`w-full h-8.5 ${isIncognitoActive ? 'pl-[110px]' : 'pl-9'} pr-18 text-[12.5px] font-bold rounded-full border border-zinc-800/80 bg-[#0f0f14] hover:border-zinc-700/80 focus:border-zinc-600 focus:bg-[#0f0f14] text-white placeholder-zinc-500 outline-none transition-all`}
+                />
 
             {/* Star Bookmark button inside Address Bar */}
             <button
@@ -567,7 +686,9 @@ export default function BrowserToolbar({
                 <line x1="12" y1="2" x2="12" y2="15" />
               </svg>
             </button>
-          </div>
+              </div>
+            );
+          })()}
 
           {/* Autocomplete / Search Suggestions dropdown */}
           {isInputFocused && suggestions.length > 0 && (
@@ -638,7 +759,6 @@ export default function BrowserToolbar({
               onClick={(e) => {
                 e.stopPropagation();
                 setActiveUtilityPopover(activeUtilityPopover === 'adblock' ? null : 'adblock');
-                setShowProfilePopover(false);
               }}
               className={`p-1.5 rounded-full border transition-all ${
                 activeUtilityPopover === 'adblock' 
@@ -652,7 +772,7 @@ export default function BrowserToolbar({
             {activeUtilityPopover === 'adblock' && (
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="absolute right-0 mt-2.5 w-56 bg-[#1b1b24] border border-zinc-800 rounded-xl p-4 shadow-2xl z-50 animate-in fade-in slide-in-from-top-1 duration-200"
+                className="absolute right-[56px] mt-2.5 w-56 bg-[#1b1b24] border border-zinc-800 rounded-xl p-4 shadow-2xl z-50 animate-in fade-in slide-in-from-top-1 duration-200"
               >
                 <div className="flex items-center gap-2 mb-2">
                   <Shield className="w-4 h-4 text-emerald-500" />
@@ -665,42 +785,21 @@ export default function BrowserToolbar({
             )}
           </div>
 
-          {/* Crypto Wallet utility (Green/grey pill styling) */}
+          {/* New Incognito Tab shortcut utility */}
           <div className="relative">
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setActiveUtilityPopover(activeUtilityPopover === 'wallet' ? null : 'wallet');
-                setShowProfilePopover(false);
+              onClick={() => {
+                if (onAddIncognitoTab) {
+                  onAddIncognitoTab();
+                }
               }}
-              className={`p-1.5 rounded-full border transition-all ${
-                activeUtilityPopover === 'wallet' 
-                  ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.2)]' 
-                  : 'border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800/40'
-              }`}
-              title="Web3 Wallet"
+              className="p-1.5 rounded-full border border-zinc-800 text-zinc-400 hover:text-purple-400 hover:border-purple-800/60 hover:bg-purple-950/20 hover:scale-105 active:scale-95 transition-all duration-200 cursor-pointer"
+              title="New Incognito Tab"
             >
-              <CreditCard className="w-4 h-4" strokeWidth={2.2} />
+              <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                <path d="M12 2C9.5 2 7.4 3.7 6.8 6H17.2C16.6 3.7 14.5 2 12 2ZM2 10V12H22V10H2ZM6.5 14C4.6 14 3 15.6 3 17.5C3 19.4 4.6 21 6.5 21C8.1 21 9.5 19.9 9.9 18.4C10.5 18.7 11.2 18.9 12 18.9C12.8 18.9 13.5 18.7 14.1 18.4C14.5 19.9 15.9 21 17.5 21C19.4 21 21 19.4 21 17.5C21 15.6 19.4 14 17.5 14C15.9 14 14.5 15.1 14.1 16.6C13.5 16.3 12.8 16.1 12 16.1C11.2 16.1 10.5 16.3 9.9 16.6C9.5 15.1 8.1 14 6.5 14ZM6.5 15.5C7.6 15.5 8.5 16.4 8.5 17.5C8.5 18.6 7.6 19.5 6.5 19.5C5.4 19.5 4.5 18.6 4.5 17.5C4.5 16.4 5.4 15.5 6.5 15.5ZM17.5 15.5C18.6 15.5 19.5 16.4 19.5 17.5C19.5 18.6 18.6 19.5 17.5 19.5C16.4 19.5 15.5 18.6 15.5 17.5C15.5 16.4 16.4 15.5 17.5 15.5Z" />
+              </svg>
             </button>
-            {activeUtilityPopover === 'wallet' && (
-              <div
-                onClick={(e) => e.stopPropagation()}
-                className="absolute right-0 mt-2.5 w-64 bg-[#1b1b24] border border-zinc-800 rounded-xl p-4 shadow-2xl z-50 animate-in fade-in slide-in-from-top-1 duration-200"
-              >
-                <div className="flex items-center justify-between mb-3 border-b border-zinc-850 pb-2">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-[#78a2e1]" />
-                    <span className="text-xs font-bold text-white">Nova Wallet</span>
-                  </div>
-                  <span className="text-[9px] font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full">Mainnet</span>
-                </div>
-                <div className="flex flex-col gap-1 text-left">
-                  <span className="text-[9px] uppercase tracking-wider text-zinc-500">Balance</span>
-                  <span className="text-lg font-black text-white">0.42 ETH</span>
-                  <span className="text-[10px] text-zinc-400">≈ $1,290.54 USD</span>
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Extensions utility */}
@@ -709,7 +808,6 @@ export default function BrowserToolbar({
               onClick={(e) => {
                 e.stopPropagation();
                 setActiveUtilityPopover(activeUtilityPopover === 'extensions' ? null : 'extensions');
-                setShowProfilePopover(false);
               }}
               className={`p-1.5 rounded-full border border-zinc-800 transition-all ${
                 activeUtilityPopover === 'extensions' ? 'bg-[#a259ff]/10 border-[#a259ff] text-[#a259ff]' : 'text-zinc-400 hover:text-white hover:bg-zinc-800/40'
@@ -721,7 +819,7 @@ export default function BrowserToolbar({
             {activeUtilityPopover === 'extensions' && (
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="absolute right-0 mt-2.5 w-64 bg-[#1b1b24] border border-zinc-800 rounded-xl p-3 shadow-2xl z-50 animate-in fade-in slide-in-from-top-1 duration-200"
+                className="absolute right-[56px] mt-2.5 w-64 bg-[#1b1b24] border border-zinc-800 rounded-xl p-3 shadow-2xl z-50 animate-in fade-in slide-in-from-top-1 duration-200"
               >
                 <span className="text-[10px] font-bold text-zinc-400 block px-2.5 pb-2 border-b border-zinc-850">Installed Extensions</span>
                 <div className="flex flex-col gap-1 mt-2">
@@ -744,7 +842,6 @@ export default function BrowserToolbar({
               onClick={(e) => {
                 e.stopPropagation();
                 setActiveUtilityPopover(activeUtilityPopover === 'apps' ? null : 'apps');
-                setShowProfilePopover(false);
               }}
               className={`p-1.5 rounded-full border border-zinc-800 transition-all ${
                 activeUtilityPopover === 'apps' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800/40'
@@ -766,7 +863,7 @@ export default function BrowserToolbar({
             {activeUtilityPopover === 'apps' && (
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="absolute right-0 mt-2.5 w-64 bg-[#1b1b24] border border-zinc-800 rounded-xl p-4 shadow-2xl z-50 animate-in fade-in slide-in-from-top-1 duration-200"
+                className="absolute right-[56px] mt-2.5 w-64 bg-[#1b1b24] border border-zinc-800 rounded-xl p-4 shadow-2xl z-50 animate-in fade-in slide-in-from-top-1 duration-200"
               >
                 <span className="text-[10px] font-bold text-zinc-400 block border-b border-zinc-850 pb-2 mb-2">Google Apps</span>
                 <div className="grid grid-cols-3 gap-3">
@@ -808,13 +905,33 @@ export default function BrowserToolbar({
               onClick={(e) => {
                 e.stopPropagation();
                 setShowProfilePopover(!showProfilePopover);
-                setActiveUtilityPopover(null);
               }}
               className="w-8 h-8 rounded-full overflow-hidden border border-zinc-800 hover:border-zinc-700 bg-zinc-900 flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 shadow-md"
               title={user ? `Google Account: ${user.name}` : 'Sign in to Google'}
             >
-              {user ? (
-                <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" />
+              {user && user.email && user.email.toLowerCase() === 'code.faisal.dev@gmail.com' ? (
+                <div className="w-full h-full bg-[#fefefe] flex items-center justify-center">
+                  <svg className="w-5.5 h-5.5 text-red-600 fill-current" viewBox="0 0 24 24">
+                    <path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3z" />
+                    <path d="M5 13.18v4C5 19.3 8.13 21 12 21s7-1.7 7-3.82v-4L12 17l-7-3.82z" />
+                  </svg>
+                </div>
+              ) : user && user.avatarUrl && user.avatarUrl.trim() !== '' && !avatarFailed && !failedProfileImages[user.email] ? (
+                <img 
+                  src={user.avatarUrl} 
+                  alt="" 
+                  className="w-full h-full object-cover" 
+                  onError={() => {
+                    setAvatarFailed(true);
+                    if (user.email) {
+                      setFailedProfileImages(prev => ({ ...prev, [user.email]: true }));
+                    }
+                  }} 
+                />
+              ) : user ? (
+                <div className={`w-full h-full flex items-center justify-center font-bold text-xs uppercase ${getProfileColor(user.name)}`}>
+                  {getInitials(user.name)}
+                </div>
               ) : (
                 <svg className="w-4.5 h-4.5 text-zinc-400 fill-current" viewBox="0 0 24 24">
                   <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
@@ -822,103 +939,313 @@ export default function BrowserToolbar({
               )}
             </button>
 
-            {/* Profile Popover Overlay Card */}
+            {/* Profile Popover Overlay Card (Chrome-Style Profile Menu) */}
             {showProfilePopover && (
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="absolute right-0 mt-2.5 w-72 bg-[#1b1b24] border border-zinc-800 rounded-2xl p-5 shadow-2xl flex flex-col gap-4.5 z-50 text-left animate-in fade-in slide-in-from-top-2 duration-200"
+                className="absolute right-[56px] mt-2.5 w-80 bg-[#1b1b24] border border-zinc-800 rounded-2xl p-4 shadow-2xl flex flex-col gap-4.5 z-50 text-left animate-in fade-in slide-in-from-top-2 duration-200"
               >
-                {user ? (
-                  <>
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-full overflow-hidden border border-zinc-700">
-                        <img src={user.avatarUrl} alt="" className="w-full h-full object-cover" />
+                {/* 1. Active Profile Header Card */}
+                <div className="flex flex-col items-center p-4 rounded-xl bg-zinc-900/60 border border-zinc-850/60 relative overflow-hidden group">
+                  {/* Top card banner background */}
+                  <div className="absolute top-0 inset-x-0 h-10 bg-indigo-900/20" />
+                  
+                  {/* Avatar wrapper */}
+                  <div className="relative z-10 w-16 h-16 rounded-full overflow-hidden border-2 border-zinc-800 bg-[#fefefe] flex items-center justify-center shadow-lg mt-2 mb-2 bg-gradient-to-tr from-zinc-200 to-white flex-shrink-0">
+                    {user && user.email && user.email.toLowerCase() === 'code.faisal.dev@gmail.com' ? (
+                      <svg className="w-9 h-9 text-red-600 fill-current" viewBox="0 0 24 24">
+                        <path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3z" />
+                        <path d="M5 13.18v4C5 19.3 8.13 21 12 21s7-1.7 7-3.82v-4L12 17l-7-3.82z" />
+                      </svg>
+                    ) : user && user.avatarUrl && user.avatarUrl.trim() !== '' && !avatarFailed && !failedProfileImages[user.email] ? (
+                      <img 
+                        src={user.avatarUrl} 
+                        alt="" 
+                        className="w-full h-full object-cover" 
+                        onError={() => {
+                          setAvatarFailed(true);
+                          if (user.email) {
+                            setFailedProfileImages(prev => ({ ...prev, [user.email]: true }));
+                          }
+                        }} 
+                      />
+                    ) : user ? (
+                      <div className={`w-full h-full flex items-center justify-center font-black text-xl uppercase ${getProfileColor(user.name)}`}>
+                        {getInitials(user.name)}
                       </div>
-                      <div className="flex flex-col overflow-hidden">
-                        <span className="text-xs font-bold text-white truncate">{user.name}</span>
-                        <span className="text-[10px] text-zinc-500 truncate">{user.email}</span>
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-zinc-900/40 border border-zinc-850">
-                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="text-[10px] font-bold text-zinc-450">Sync is active</span>
-                    </div>
-
-                    <div className="flex flex-col gap-2">
-                      <button
-                        onClick={() => {
-                          onLogout();
-                          setShowProfilePopover(false);
-                        }}
-                        className="w-full py-2 bg-zinc-800 hover:bg-zinc-750 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 border border-zinc-750"
-                      >
-                        <LogOut className="w-3.5 h-3.5" />
-                        <span>Turn Off Sync</span>
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="flex flex-col items-center text-center gap-2.5 py-2">
-                      <div className="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center">
-                        <svg className="w-6 h-6 text-zinc-500 fill-current" viewBox="0 0 24 24">
-                          <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-                        </svg>
-                      </div>
-                      <div className="flex flex-col gap-0.5">
-                        <h4 className="text-xs font-bold text-white">Sign in to N.O.V.A.</h4>
-                        <p className="text-[9px] text-zinc-500 leading-relaxed px-2">
-                          Sync your bookmarks, history, and settings across all your devices.
-                        </p>
-                      </div>
-                    </div>
-
+                    ) : (
+                      <svg className="w-8 h-8 text-zinc-500 fill-current" viewBox="0 0 24 24">
+                        <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                      </svg>
+                    )}
+                  </div>
+                  
+                  <div className="flex flex-col items-center text-center w-full z-10">
+                    <span className="text-sm font-black text-white truncate max-w-full">
+                      {user ? user.name : 'Guest User'}
+                    </span>
+                    <span className="text-[10px] text-zinc-450 truncate max-w-full mt-0.5 font-medium">
+                      {user ? user.email : 'Sync is off'}
+                    </span>
+                  </div>
+                  
+                  {!user && (
                     <button
                       onClick={() => {
-                        onLogin();
+                        onNavigate('nova://signin');
                         setShowProfilePopover(false);
                       }}
-                      className="w-full py-2.5 bg-white hover:bg-zinc-100 text-zinc-950 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-white/5"
+                      className="mt-3.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-[10.5px] font-bold transition-all shadow-md shadow-indigo-600/10 cursor-pointer"
                     >
-                      <svg className="w-4.5 h-4.5" viewBox="0 0 24 24">
-                        <path
-                          d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                          fill="#4285F4"
-                        />
-                        <path
-                          d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                          fill="#34A853"
-                        />
-                        <path
-                          d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                          fill="#FBBC05"
-                        />
-                        <path
-                          d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                          fill="#EA4335"
-                        />
-                      </svg>
-                      <span>Sign in with Google</span>
+                      Sign in to Google
                     </button>
+                  )}
+                </div>
+
+                {/* 2. Menu Actions */}
+                <div className="flex flex-col gap-0.5">
+                  <button
+                    onClick={() => {
+                      onOpenSettings('autofill');
+                      setShowProfilePopover(false);
+                    }}
+                    className="flex items-center gap-3 w-full px-3 py-2.5 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-800/60 rounded-xl transition-all text-left cursor-pointer"
+                  >
+                    <Key className="w-4 h-4 text-zinc-450" />
+                    <span>Passwords and autofill</span>
+                  </button>
+
+                  <a
+                    href="https://myaccount.google.com"
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={() => setShowProfilePopover(false)}
+                    className="flex items-center gap-3 w-full px-3 py-2.5 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-800/60 rounded-xl transition-all text-left"
+                  >
+                    <User className="w-4 h-4 text-zinc-450" />
+                    <span>Manage your Google Account</span>
+                  </a>
+
+                  <button
+                    onClick={() => {
+                      onOpenSettings('customize');
+                      setShowProfilePopover(false);
+                    }}
+                    className="flex items-center gap-3 w-full px-3 py-2.5 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-800/60 rounded-xl transition-all text-left cursor-pointer"
+                  >
+                    <Pencil className="w-4 h-4 text-zinc-450" />
+                    <span>Customize profile</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (user) {
+                        onOpenSettings('sync');
+                      } else {
+                        onNavigate('nova://signin');
+                      }
+                      setShowProfilePopover(false);
+                    }}
+                    className="flex items-center justify-between w-full px-3 py-2.5 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-800/60 rounded-xl transition-all text-left group cursor-pointer"
+                  >
+                    <div className="flex items-center gap-3">
+                      <RefreshCw className={`w-4 h-4 text-zinc-450 ${user ? 'animate-[spin_10s_linear_infinite]' : ''}`} />
+                      <span>{user ? 'Sync is on' : 'Sync is off'}</span>
+                    </div>
+                    {user && (
+                      <span className="text-[9px] font-black text-emerald-400 uppercase tracking-widest bg-emerald-500/10 px-1.5 py-0.5 rounded">Active</span>
+                    )}
+                  </button>
+                </div>
+
+                {/* 3. Other Profiles Switcher */}
+                {profiles.filter(p => !user || p.email.toLowerCase() !== user.email.toLowerCase()).length > 0 && (
+                  <>
+                    <div className="border-t border-zinc-850/60" />
+                    <div className="flex flex-col gap-2">
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-zinc-550 pl-1 select-none">
+                        Other profiles
+                      </span>
+                      
+                      <div className="max-h-36 overflow-y-auto pr-1 flex flex-col gap-1 no-scrollbar">
+                        {profiles
+                          .filter(p => !user || p.email.toLowerCase() !== user.email.toLowerCase())
+                          .map((p, idx) => (
+                            <button
+                              key={idx}
+                              onClick={() => {
+                                onLogin(p);
+                                setShowProfilePopover(false);
+                              }}
+                              className="w-full flex items-center justify-between p-2 rounded-lg hover:bg-zinc-800/40 text-left text-xs font-semibold text-zinc-400 hover:text-white transition-all group cursor-pointer"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                {p.email && p.email.toLowerCase() === 'code.faisal.dev@gmail.com' ? (
+                                  <div className="w-5 h-5 rounded-full overflow-hidden bg-[#fefefe] flex items-center justify-center shadow-xs border border-zinc-700 flex-shrink-0">
+                                    <svg className="w-3.5 h-3.5 text-red-600 fill-current" viewBox="0 0 24 24">
+                                      <path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3z" />
+                                      <path d="M5 13.18v4C5 19.3 8.13 21 12 21s7-1.7 7-3.82v-4L12 17l-7-3.82z" />
+                                    </svg>
+                                  </div>
+                                ) : p.avatarUrl && p.avatarUrl.trim() !== '' && !failedProfileImages[p.email] ? (
+                                  <img
+                                    src={p.avatarUrl}
+                                    alt=""
+                                    className="w-5 h-5 rounded-full object-cover border border-zinc-700 flex-shrink-0"
+                                    onError={() => setFailedProfileImages(prev => ({ ...prev, [p.email]: true }))}
+                                  />
+                                ) : (
+                                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold uppercase border border-zinc-700 flex-shrink-0 ${getProfileColor(p.name)}`}>
+                                    {getInitials(p.name)}
+                                  </div>
+                                )}
+                                <div className="flex flex-col min-w-0">
+                                  <span className="truncate text-xs font-bold leading-tight group-hover:text-indigo-400 transition-colors">{p.name}</span>
+                                  <span className="truncate text-[8.5px] text-zinc-550 leading-none group-hover:text-zinc-400 transition-colors mt-0.5">{p.email}</span>
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
                   </>
                 )}
+
+                <div className="border-t border-zinc-850/60" />
+
+                {/* 4. Footer Management Actions */}
+                <div className="flex flex-col gap-0.5">
+                  <button
+                    onClick={() => {
+                      onNavigate('nova://signin');
+                      setShowProfilePopover(false);
+                    }}
+                    className="flex items-center gap-3 w-full px-3 py-2 text-xs font-semibold text-zinc-350 hover:text-white hover:bg-zinc-800/60 rounded-xl transition-all text-left cursor-pointer"
+                  >
+                    <UserPlus className="w-4 h-4 text-zinc-450" />
+                    <span>Add Profile</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      onLogin({
+                        name: 'Guest User',
+                        email: 'guest.nova@gmail.com',
+                        avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=150&h=150',
+                      });
+                      setShowProfilePopover(false);
+                    }}
+                    className="flex items-center gap-3 w-full px-3 py-2 text-xs font-semibold text-zinc-355 hover:text-white hover:bg-zinc-800/60 rounded-xl transition-all text-left cursor-pointer"
+                  >
+                    <UserCheck className="w-4 h-4 text-zinc-450" />
+                    <span>Open Guest profile</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      onOpenSettings('profiles');
+                      setShowProfilePopover(false);
+                    }}
+                    className="flex items-center gap-3 w-full px-3 py-2 text-xs font-semibold text-zinc-350 hover:text-white hover:bg-zinc-800/60 rounded-xl transition-all text-left cursor-pointer"
+                  >
+                    <Settings className="w-4 h-4 text-zinc-450" />
+                    <span>Manage profiles</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>
 
-          {/* 3-Dots Vertical Menu (Settings) */}
-          <button
-            onClick={() => onOpenSettings()}
-            className="p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/50 transition-all flex items-center justify-center"
-            title="Browser Settings"
-          >
-            <svg className="w-4.5 h-4.5 fill-current" viewBox="0 0 24 24">
-              <circle cx="12" cy="5" r="2" />
-              <circle cx="12" cy="12" r="2" />
-              <circle cx="12" cy="19" r="2" />
-            </svg>
-          </button>
+          {/* 3-Dots Vertical Menu */}
+          <div className="relative">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowMenuPopover(!showMenuPopover);
+              }}
+              className={`p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/50 transition-all flex items-center justify-center ${showMenuPopover ? 'bg-zinc-800/50 text-white' : ''}`}
+              title="Browser Menu"
+            >
+              <svg className="w-4.5 h-4.5 fill-current" viewBox="0 0 24 24">
+                <circle cx="12" cy="5" r="2" />
+                <circle cx="12" cy="12" r="2" />
+                <circle cx="12" cy="19" r="2" />
+              </svg>
+            </button>
+
+            {showMenuPopover && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="absolute right-[56px] mt-2 w-56 bg-[#1b1b24]/95 backdrop-blur-md border border-zinc-800 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-0.5 z-[100] text-left animate-in fade-in slide-in-from-top-2 duration-200"
+              >
+                <button
+                  onClick={() => {
+                    onAddTab();
+                    setShowMenuPopover(false);
+                  }}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-zinc-300 hover:text-white hover:bg-zinc-800/60 transition-all font-semibold cursor-pointer w-full text-left"
+                >
+                  <Plus className="w-4 h-4 text-zinc-400" />
+                  New Tab
+                </button>
+
+                <button
+                  onClick={() => {
+                    if (onAddIncognitoTab) {
+                      onAddIncognitoTab();
+                    }
+                    setShowMenuPopover(false);
+                  }}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-purple-300 hover:text-purple-200 hover:bg-purple-950/40 transition-all font-semibold cursor-pointer w-full text-left"
+                >
+                  <svg className="w-4 h-4 text-purple-400 fill-current" viewBox="0 0 24 24">
+                    <path d="M12 2C9.5 2 7.4 3.7 6.8 6H17.2C16.6 3.7 14.5 2 12 2ZM2 10V12H22V10H2ZM6.5 14C4.6 14 3 15.6 3 17.5C3 19.4 4.6 21 6.5 21C8.1 21 9.5 19.9 9.9 18.4C10.5 18.7 11.2 18.9 12 18.9C12.8 18.9 13.5 18.7 14.1 18.4C14.5 19.9 15.9 21 17.5 21C19.4 21 21 19.4 21 17.5C21 15.6 19.4 14 17.5 14C15.9 14 14.5 15.1 14.1 16.6C13.5 16.3 12.8 16.1 12 16.1C11.2 16.1 10.5 16.3 9.9 16.6C9.5 15.1 8.1 14 6.5 14ZM6.5 15.5C7.6 15.5 8.5 16.4 8.5 17.5C8.5 18.6 7.6 19.5 6.5 19.5C5.4 19.5 4.5 18.6 4.5 17.5C4.5 16.4 5.4 15.5 6.5 15.5ZM17.5 15.5C18.6 15.5 19.5 16.4 19.5 17.5C19.5 18.6 18.6 19.5 17.5 19.5C16.4 19.5 15.5 18.6 15.5 17.5C15.5 16.4 16.4 15.5 17.5 15.5Z" />
+                  </svg>
+                  New Incognito Tab
+                </button>
+
+                <div className="h-[1px] bg-zinc-800/60 my-1 mx-2" />
+
+                <button
+                  onClick={() => {
+                    onNavigate('nova://bookmarks');
+                    setShowMenuPopover(false);
+                  }}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-zinc-300 hover:text-white hover:bg-zinc-800/60 transition-all font-semibold cursor-pointer w-full text-left"
+                >
+                  <Star className="w-4 h-4 text-zinc-400" />
+                  Bookmarks
+                </button>
+
+                <button
+                  onClick={() => {
+                    onNavigate('nova://history');
+                    setShowMenuPopover(false);
+                  }}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-zinc-300 hover:text-white hover:bg-zinc-800/60 transition-all font-semibold cursor-pointer w-full text-left"
+                >
+                  <svg className="w-4 h-4 text-zinc-400 fill-none stroke-current" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                  </svg>
+                  History
+                </button>
+
+                <div className="h-[1px] bg-zinc-800/60 my-1 mx-2" />
+
+                <button
+                  onClick={() => {
+                    onOpenSettings();
+                    setShowMenuPopover(false);
+                  }}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-zinc-300 hover:text-white hover:bg-zinc-800/60 transition-all font-semibold cursor-pointer w-full text-left"
+                >
+                  <Settings className="w-4 h-4 text-zinc-400" />
+                  Settings
+                </button>
+              </div>
+            )}
+          </div>
 
         </div>
       </div>
@@ -1041,8 +1368,22 @@ export default function BrowserToolbar({
                   <span className="text-[10px] text-zinc-500">14,809 ads blocked</span>
                 </div>
               </div>
-              <button onClick={() => { onOpenSettings(); setIsMobileMenuOpen(false); }} className="flex items-center gap-2.5 p-2.5 rounded-xl hover:bg-zinc-800/50 transition-all w-full text-left">
-                <Settings className="w-4 h-4 text-zinc-400" />
+              
+              <button 
+                onClick={() => { 
+                  if (onAddIncognitoTab) onAddIncognitoTab(); 
+                  setIsMobileMenuOpen(false); 
+                }} 
+                className="flex items-center gap-2.5 p-2.5 rounded-xl hover:bg-purple-950/20 text-purple-400 hover:text-purple-300 transition-all w-full text-left cursor-pointer"
+              >
+                <svg className="w-4 h-4 fill-current flex-shrink-0" viewBox="0 0 24 24">
+                  <path d="M12 2C9.5 2 7.4 3.7 6.8 6H17.2C16.6 3.7 14.5 2 12 2ZM2 10V12H22V10H2ZM6.5 14C4.6 14 3 15.6 3 17.5C3 19.4 4.6 21 6.5 21C8.1 21 9.5 19.9 9.9 18.4C10.5 18.7 11.2 18.9 12 18.9C12.8 18.9 13.5 18.7 14.1 18.4C14.5 19.9 15.9 21 17.5 21C19.4 21 21 19.4 21 17.5C21 15.6 19.4 14 17.5 14C15.9 14 14.5 15.1 14.1 16.6C13.5 16.3 12.8 16.1 12 16.1C11.2 16.1 10.5 16.3 9.9 16.6C9.5 15.1 8.1 14 6.5 14ZM6.5 15.5C7.6 15.5 8.5 16.4 8.5 17.5C8.5 18.6 7.6 19.5 6.5 19.5C5.4 19.5 4.5 18.6 4.5 17.5C4.5 16.4 5.4 15.5 6.5 15.5ZM17.5 15.5C18.6 15.5 19.5 16.4 19.5 17.5C19.5 18.6 18.6 19.5 17.5 19.5C16.4 19.5 15.5 18.6 15.5 17.5C15.5 16.4 16.4 15.5 17.5 15.5Z" />
+                </svg>
+                <span className="text-xs font-bold">New Incognito Tab</span>
+              </button>
+
+              <button onClick={() => { onOpenSettings(); setIsMobileMenuOpen(false); }} className="flex items-center gap-2.5 p-2.5 rounded-xl hover:bg-zinc-800/50 transition-all w-full text-left cursor-pointer">
+                <Settings className="w-4 h-4 text-zinc-400 flex-shrink-0" />
                 <span className="text-xs font-bold text-white">Settings</span>
               </button>
             </div>
@@ -1056,13 +1397,19 @@ export default function BrowserToolbar({
                     <span className="text-xs font-bold text-white truncate">{user.name}</span>
                     <span className="text-[10px] text-zinc-500 truncate">{user.email}</span>
                   </div>
-                  <button onClick={() => { onLogout(); setIsMobileMenuOpen(false); }} className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-white transition-all">
+                  <button onClick={() => { onLogout(); setIsMobileMenuOpen(false); }} className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-white transition-all cursor-pointer">
                     <LogOut className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ) : (
-                <button onClick={() => { onLogin(); setIsMobileMenuOpen(false); }} className="w-full py-2.5 bg-white hover:bg-zinc-100 text-zinc-950 rounded-xl text-xs font-black flex items-center justify-center gap-2">
-                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                <button
+                  onClick={() => {
+                    onNavigate('nova://signin');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className="w-full py-2.5 bg-white hover:bg-zinc-100 text-zinc-950 rounded-xl text-xs font-black flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <svg className="w-4.5 h-4.5" viewBox="0 0 24 24">
                     <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
                     <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
                     <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05" />

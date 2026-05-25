@@ -33,7 +33,8 @@ pub fn run() {
       browser::maximize_window,
       browser::close_window,
       browser::get_google_suggestions,
-      browser::call_llm_api
+      browser::call_llm_api,
+      browser::eval_js_in_browser
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
