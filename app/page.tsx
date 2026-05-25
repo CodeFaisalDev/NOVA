@@ -11,7 +11,7 @@ import {
   getGoogleSuggestions,
   callLlmApi
 } from '@/lib/ipc';
-import { Search, Star, Globe, X, Settings, Eye, Shield, Lock, Mic, Heart, Sun, Utensils, Film, Plane, MessageSquare, Users, Newspaper, Plus, Bot, Sparkles, Send, Paperclip, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, Star, Globe, X, Settings, Eye, Shield, Lock, Mic, Heart, Sun, Utensils, Film, Plane, MessageSquare, Users, Newspaper, Plus, Bot, Sparkles, Send, Paperclip, RotateCcw, ChevronLeft, ChevronRight, Trash2, ArrowLeft } from 'lucide-react';
 
 // ─── Frameless Window Resize Handles ──────────────────────────────────────────
 // Tauri with decorations:false has no native resize handles. These invisible
@@ -157,16 +157,101 @@ export default function Home() {
     timestamp: Date;
   }
 
-  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([
-    {
-      id: 'welcome',
-      sender: 'agent',
-      content: "Hi, I'm N.O.V.A. Agent. I can help you audit security, extract lists, or summarize documents. Choose an action below or ask me anything:",
-      timestamp: new Date(),
-    }
-  ]);
+  interface ChatSession {
+    id: string;
+    title: string;
+    messages: AgentMessage[];
+    createdAt: string;
+  }
+
+  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
   const [agentInputValue, setAgentInputValue] = useState('');
   const [isAgentTyping, setIsAgentTyping] = useState(false);
+
+  // Chat Session states
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string>('');
+  const [showHistory, setShowHistory] = useState<boolean>(false);
+
+  // Load chat sessions from local storage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('nova-agent-sessions');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.length > 0) {
+          const formatted = parsed.map((s: any) => ({
+            ...s,
+            messages: s.messages.map((m: any) => ({
+              ...m,
+              timestamp: new Date(m.timestamp)
+            }))
+          }));
+          setChatSessions(formatted);
+          setActiveSessionId(formatted[0].id);
+          setAgentMessages(formatted[0].messages);
+          return;
+        }
+      } catch (e) {
+        console.error("Failed to parse sessions", e);
+      }
+    }
+    
+    // Initial session if none found
+    const initialId = `session-${Date.now()}`;
+    const initialSession: ChatSession = {
+      id: initialId,
+      title: 'Welcome Session',
+      messages: [
+        {
+          id: 'welcome',
+          sender: 'agent',
+          content: "Hi, I'm N.O.V.A. Agent. I can help you audit security, extract lists, or summarize documents. Choose an action below or ask me anything:",
+          timestamp: new Date(),
+        }
+      ],
+      createdAt: new Date().toISOString()
+    };
+    setChatSessions([initialSession]);
+    setActiveSessionId(initialId);
+    setAgentMessages(initialSession.messages);
+  }, []);
+
+  // Sync active session changes to local storage
+  useEffect(() => {
+    if (chatSessions.length === 0 || !activeSessionId || agentMessages.length === 0) return;
+
+    setChatSessions(prev => {
+      let isChanged = false;
+      const updated = prev.map(session => {
+        if (session.id === activeSessionId) {
+          const msgIds = session.messages.map(m => m.id).join(',');
+          const activeMsgIds = agentMessages.map(m => m.id).join(',');
+          if (msgIds !== activeMsgIds) {
+            isChanged = true;
+            let newTitle = session.title;
+            if (newTitle === 'Welcome Session' || newTitle === 'New Chat') {
+              const firstUserMsg = agentMessages.find(m => m.sender === 'user');
+              if (firstUserMsg) {
+                newTitle = firstUserMsg.content.slice(0, 26) + (firstUserMsg.content.length > 26 ? '...' : '');
+              }
+            }
+            return {
+              ...session,
+              title: newTitle,
+              messages: agentMessages
+            };
+          }
+        }
+        return session;
+      });
+
+      if (isChanged) {
+        localStorage.setItem('nova-agent-sessions', JSON.stringify(updated));
+      }
+      return updated;
+    });
+  }, [agentMessages, activeSessionId, chatSessions]);
 
   const handleSendAgentMessage = async (text: string) => {
     if (!text.trim()) return;
@@ -176,11 +261,11 @@ export default function Home() {
       content: text.trim(),
       timestamp: new Date(),
     };
-    setAgentMessages(prev => [...prev, userMsg]);
+    const updatedMessages = [...agentMessages, userMsg];
+    setAgentMessages(updatedMessages);
     setAgentInputValue('');
     setIsAgentTyping(true);
 
-    // Check if API key is configured
     if (!aiApiKey.trim()) {
       const fallbackMsg: AgentMessage = {
         id: `agent-${Date.now()}`,
@@ -188,7 +273,7 @@ export default function Home() {
         content: `⚠️ **No API Key Configured**\n\nTo use the N.O.V.A. Copilot, please configure your AI provider and API key in **Settings** (nova://settings).\n\nSupported providers:\n• **Groq** — console.groq.com\n• **OpenRouter** — openrouter.ai/keys\n• **OpenAI** — platform.openai.com`,
         timestamp: new Date(),
       };
-      setAgentMessages(prev => [...prev, fallbackMsg]);
+      setAgentMessages([...updatedMessages, fallbackMsg]);
       setIsAgentTyping(false);
       return;
     }
@@ -225,16 +310,67 @@ export default function Home() {
   };
 
   const handleNewConversation = () => {
-    setAgentMessages([
-      {
-        id: 'welcome',
-        sender: 'agent',
-        content: "Hi, I'm N.O.V.A. Agent. I can help you audit security, extract lists, or summarize documents. Choose an action below or ask me anything:",
-        timestamp: new Date(),
-      }
-    ]);
+    const newId = `session-${Date.now()}`;
+    const newSession: ChatSession = {
+      id: newId,
+      title: 'New Chat',
+      messages: [
+        {
+          id: `welcome-${Date.now()}`,
+          sender: 'agent',
+          content: "Hi, I'm N.O.V.A. Agent. I can help you audit security, extract lists, or summarize documents. Choose an action below or ask me anything:",
+          timestamp: new Date(),
+        }
+      ],
+      createdAt: new Date().toISOString()
+    };
+    setChatSessions(prev => [newSession, ...prev]);
+    setActiveSessionId(newId);
+    setAgentMessages(newSession.messages);
     setAgentInputValue('');
     setIsAgentTyping(false);
+    setShowHistory(false);
+  };
+
+  const handleLoadSession = (sessionId: string) => {
+    const session = chatSessions.find(s => s.id === sessionId);
+    if (session) {
+      setActiveSessionId(sessionId);
+      setAgentMessages(session.messages);
+      setShowHistory(false);
+    }
+  };
+
+  const handleDeleteSession = (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updated = chatSessions.filter(s => s.id !== sessionId);
+    setChatSessions(updated);
+    localStorage.setItem('nova-agent-sessions', JSON.stringify(updated));
+
+    if (activeSessionId === sessionId) {
+      if (updated.length > 0) {
+        setActiveSessionId(updated[0].id);
+        setAgentMessages(updated[0].messages);
+      } else {
+        const newId = `session-${Date.now()}`;
+        const newSession: ChatSession = {
+          id: newId,
+          title: 'Welcome Session',
+          messages: [
+            {
+              id: `welcome-${Date.now()}`,
+              sender: 'agent',
+              content: "Hi, I'm N.O.V.A. Agent. I can help you audit security, extract lists, or summarize documents. Choose an action below or ask me anything:",
+              timestamp: new Date(),
+            }
+          ],
+          createdAt: new Date().toISOString()
+        };
+        setChatSessions([newSession]);
+        setActiveSessionId(newId);
+        setAgentMessages(newSession.messages);
+      }
+    }
   };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1805,10 +1941,10 @@ export default function Home() {
         {isMounted && !isMobile && (
           <div 
             style={{ 
-              width: isAgentSidebarOpen ? `${agentSidebarWidth}px` : '0px',
+              width: isAgentSidebarOpen ? `${agentSidebarWidth}px` : '30px',
               borderLeftWidth: isAgentSidebarOpen ? '1px' : '0px',
             }}
-            className="h-full flex-shrink-0 bg-[#07070a]/98 border-zinc-800/60 flex flex-col relative select-none z-35 shadow-2xl backdrop-blur-xl transition-all duration-300 ease-in-out overflow-visible"
+            className="h-full flex-shrink-0 bg-[#0f0f12] border-zinc-800/50 flex flex-col relative select-none z-35 shadow-2xl backdrop-blur-xl transition-all duration-300 ease-in-out overflow-visible"
           >
             {/* Resize handle (only when open) */}
             {isAgentSidebarOpen && (
@@ -1818,178 +1954,276 @@ export default function Home() {
               />
             )}
 
-            {/* Sliding Toggle Action Button - Floating just below 3-dots */}
-            <div className="absolute top-[64px] -left-15.5 z-50 animate-in fade-in duration-300">
-              <button
-                onClick={() => setIsAgentSidebarOpen(!isAgentSidebarOpen)}
-                className={`w-12 h-12 rounded-full bg-[#1b1b24] border text-zinc-400 hover:text-white flex items-center justify-center transition-all duration-300 shadow-[0_4px_24px_rgba(0,0,0,0.6)] hover:scale-105 active:scale-95 cursor-pointer ${
-                  isAgentSidebarOpen 
-                    ? 'border-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.35)] hover:scale-108' 
-                    : 'border-zinc-800 hover:border-indigo-500/50'
-                }`}
-                title={isAgentSidebarOpen ? "Hide Copilot" : "Show Copilot"}
+            {/* Google Gemini-Style Vertical Curved Toggle Handle Tab */}
+            <div 
+              onClick={() => setIsAgentSidebarOpen(!isAgentSidebarOpen)}
+              className="absolute top-[40%] left-0 w-[30px] h-[140px] group cursor-pointer z-50 select-none transition-all hover:scale-105 active:scale-95"
+              title={isAgentSidebarOpen ? "Hide Copilot" : "Show Copilot"}
+            >
+              <svg 
+                width="30" 
+                height="140" 
+                viewBox="0 0 30 140" 
+                fill="none" 
+                xmlns="http://www.w3.org/2000/svg"
+                className="drop-shadow-[0_4px_12px_rgba(0,0,0,0.55)]"
               >
-                <Bot className={`w-6 h-6 transition-all duration-300 ${isAgentSidebarOpen ? 'text-indigo-400 rotate-6 scale-110' : 'text-zinc-450'}`} strokeWidth={2.2} />
-              </button>
+                {/* Clean filled organic curve matching sidebar bg */}
+                <path 
+                  d="M30 0 C30 20 2 30 2 70 C2 110 30 120 30 140 Z" 
+                  fill="#0f0f12" 
+                />
+                {/* Border line on the left curved edge ONLY (right edge has no line to merge seamlessly) */}
+                <path 
+                  d="M30 0 C30 20 2 30 2 70 C2 110 30 120 30 140" 
+                  stroke="#2d2d39" 
+                  strokeWidth="1.5"
+                />
+              </svg>
+              {/* Pulsing Bot Agent Icon in place of Arrow */}
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none pl-1">
+                <Bot className="w-5 h-5 text-indigo-400 group-hover:text-indigo-300 transition-colors animate-pulse" strokeWidth={2.2} />
+              </div>
             </div>
 
-            {/* Fixed width inner container to keep text clean and prevent wrapping during transitions */}
-            <div 
-              style={{ width: `${agentSidebarWidth}px` }} 
-              className="h-full flex flex-col overflow-hidden"
-            >
-              {/* 1. Header with Status & New Chat */}
-              <div className="flex items-center justify-between px-4 py-3 bg-[#0f0f15]/50 border-b border-zinc-900/80">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/10">
-                    <Bot className="w-4.5 h-4.5" />
-                  </div>
-                  <div className="flex flex-col text-left">
-                    <span className="text-[11.5px] font-black text-white tracking-wider uppercase bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent font-sans">N.O.V.A. Copilot</span>
-                    <div className="flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="text-[8px] text-zinc-500 font-bold uppercase tracking-wider">Active</span>
+            {/* Fixed width inner container shifted to the right of the handle to prevent overlaps */}
+            {isAgentSidebarOpen && (
+              <div 
+                style={{ width: `${agentSidebarWidth - 30}px`, marginLeft: '30px' }} 
+                className="h-full flex flex-col overflow-hidden"
+              >
+                {showHistory ? (
+                  /* --- CHAT HISTORY PANEL LAYOUT --- */
+                  <div className="h-full flex flex-col overflow-hidden bg-[#0f0f12]">
+                    {/* History Header */}
+                    <div className="flex items-center gap-2.5 px-4 py-3 border-b border-zinc-900/60 bg-[#131316]/50">
+                      <button
+                        onClick={() => setShowHistory(false)}
+                        className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-white transition-all cursor-pointer"
+                        title="Back to Chat"
+                      >
+                        <ArrowLeft className="w-4 h-4" />
+                      </button>
+                      <span className="text-[12px] font-bold text-white tracking-wide">Saved Chats</span>
                     </div>
-                  </div>
-                </div>
-                
-                <button
-                  onClick={handleNewConversation}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[9.5px] font-extrabold uppercase tracking-wider text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 hover:border-indigo-500/35 transition-all cursor-pointer select-none"
-                  title="New Conversation"
-                >
-                  <Plus className="w-3 h-3 text-indigo-400" strokeWidth={3} />
-                  <span>New Chat</span>
-                </button>
-              </div>
 
-              {/* 2. Messages Container (Dynamic) */}
-              <div className="flex-grow overflow-y-auto p-4 flex flex-col gap-5 no-scrollbar bg-[#07070a]/40">
-                
-                {agentMessages.map((msg) => (
-                  <div 
-                    key={msg.id}
-                    className={`flex gap-3 items-start animate-in fade-in slide-in-from-bottom-2 duration-300 ${
-                      msg.sender === 'user' ? 'justify-end' : ''
-                    }`}
-                  >
-                    {msg.sender === 'agent' && (
-                      <div className="w-7.5 h-7.5 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 flex-shrink-0 border border-indigo-500/10">
-                        <Sparkles className="w-4 h-4" />
-                      </div>
-                    )}
-                    
-                    <div className={`flex flex-col gap-1 max-w-[85%] ${msg.sender === 'user' ? 'text-right max-w-[80%]' : 'text-left'}`}>
-                      <div className={`p-3 rounded-2xl text-[11px] font-medium leading-relaxed ${
-                        msg.sender === 'user'
-                          ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/10 text-left'
-                          : 'bg-zinc-900/20 border border-zinc-900/55 text-zinc-300 text-left'
-                      }`}>
-                        {renderMessageContent(msg.content)}
-                      </div>
-                      <span className={`text-[7.5px] text-zinc-650 font-bold uppercase ${msg.sender === 'user' ? 'mr-1' : 'ml-1'}`}>
-                        {msg.sender === 'user' ? 'You' : 'Copilot'}
-                      </span>
-                    </div>
-                  </div>
-                ))}
+                    {/* Sessions List */}
+                    <div className="flex-grow overflow-y-auto p-3 flex flex-col gap-2 no-scrollbar bg-[#0f0f12]">
+                      <button
+                        onClick={handleNewConversation}
+                        className="w-full flex items-center justify-center gap-2 py-2 px-3 border border-dashed border-zinc-800 hover:border-indigo-500/50 hover:bg-indigo-600/5 text-zinc-400 hover:text-white rounded-xl text-[10.5px] font-bold transition-all select-none cursor-pointer mb-2"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Start New Conversation</span>
+                      </button>
 
-                {/* Typing status indicator */}
-                {isAgentTyping && (
-                  <div className="flex gap-3 items-start animate-pulse">
-                    <div className="w-7.5 h-7.5 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 flex-shrink-0 border border-indigo-500/10">
-                      <Bot className="w-4 h-4" />
-                    </div>
-                    <div className="flex flex-col gap-1 max-w-[85%] text-left">
-                      <div className="p-3 bg-zinc-900/20 border border-zinc-900/50 rounded-2xl flex items-center gap-1.5 py-3">
-                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce [animation-delay:-0.3s]" />
-                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce [animation-delay:-0.15s]" />
-                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Prompt templates (only show on fresh welcome screen) */}
-                {agentMessages.length === 1 && (
-                  <div className="flex flex-col gap-2 mt-2 ml-10">
-                    <span className="text-[8px] text-zinc-600 font-extrabold uppercase tracking-wider select-none">Suggested Prompts</span>
-                    <div className="flex flex-col gap-1.5">
-                      {[
-                        { label: 'Summarize Page', prompt: 'Summarize the key takeaways of this page.' },
-                        { label: 'Extract Data', prompt: 'Extract page metadata structure to clean JSON format.' },
-                        { label: 'SEO Audit', prompt: 'Analyze the heading structures and meta details of this page.' }
-                      ].map((tpl, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => handleSendAgentMessage(tpl.prompt)}
-                          className="px-3 py-2 text-[10px] font-bold text-zinc-400 hover:text-white bg-zinc-900/20 hover:bg-indigo-600/15 border border-zinc-900/60 hover:border-indigo-500/20 rounded-xl transition-all cursor-pointer text-left w-full"
+                      {chatSessions.map((session) => (
+                        <div
+                          key={session.id}
+                          onClick={() => handleLoadSession(session.id)}
+                          className={`group w-full flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all ${
+                            activeSessionId === session.id
+                              ? 'bg-indigo-600/10 border border-indigo-500/20 text-white'
+                              : 'hover:bg-[#18181c] border border-transparent text-zinc-400 hover:text-zinc-200'
+                          }`}
                         >
-                          {tpl.label}
-                        </button>
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <MessageSquare className={`w-3.5 h-3.5 flex-shrink-0 ${activeSessionId === session.id ? 'text-indigo-400' : 'text-zinc-500'}`} />
+                            <div className="flex flex-col text-left min-w-0">
+                              <span className="text-[11px] font-bold truncate leading-tight">{session.title}</span>
+                              <span className="text-[8px] text-zinc-650 font-medium">
+                                {new Date(session.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={(e) => handleDeleteSession(session.id, e)}
+                            className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-600 hover:text-[#ea4335] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer flex-shrink-0"
+                            title="Delete Chat"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       ))}
                     </div>
                   </div>
-                )}
+                ) : (
+                  /* --- ACTIVE CHAT PANEL LAYOUT --- */
+                  <div className="h-full flex flex-col overflow-hidden">
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-4 py-3 bg-[#0f0f12] border-b border-zinc-900/60">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-1.5 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/10">
+                          <Bot className="w-4 h-4" />
+                        </div>
+                        <div className="flex flex-col text-left">
+                          <span className="text-[11.5px] font-extrabold text-white tracking-wide bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent font-sans">N.O.V.A. Copilot</span>
+                          <div className="flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            <span className="text-[8px] text-zinc-500 font-bold uppercase tracking-wider">Active</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => setShowHistory(true)}
+                          className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition-all cursor-pointer"
+                          title="View Saved Chats"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                        </button>
 
-                <div ref={messagesEndRef} />
-              </div>
-
-              {/* 3. Input Panel (Bottom) */}
-              <div className="p-3 bg-[#0a0a0f]/40 border-t border-zinc-900/80 flex flex-col gap-2">
-                <div className="relative flex flex-col bg-[#08080c] border border-zinc-900/90 rounded-xl px-3 py-2.5 focus-within:border-indigo-500/50 focus-within:shadow-[0_0_12px_rgba(99,102,241,0.1)] transition-all">
-                  <textarea
-                    rows={2}
-                    value={agentInputValue}
-                    onChange={(e) => setAgentInputValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSendAgentMessage(agentInputValue);
-                      }
-                    }}
-                    placeholder="Ask N.O.V.A. to analyze or automate..."
-                    className="w-full bg-transparent text-[11px] text-zinc-200 placeholder-zinc-650 outline-none resize-none font-medium leading-relaxed pr-20 no-scrollbar"
-                  />
-                  
-                  <div className="flex justify-between items-center mt-2.5 pt-2 border-t border-zinc-900/80">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => alert('Attachments features coming soon!')}
-                        className="p-1 rounded text-zinc-600 hover:text-zinc-300 hover:bg-zinc-900/50 transition-all cursor-pointer"
-                        title="Upload File"
-                      >
-                        <Paperclip className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => alert('Voice typing coming soon!')}
-                        className="p-1 rounded text-zinc-600 hover:text-[#ea4335] hover:bg-[#ea4335]/10 transition-all cursor-pointer"
-                        title="Voice Input"
-                      >
-                        <Mic className="w-3.5 h-3.5" />
-                      </button>
+                        <button
+                          onClick={handleNewConversation}
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[9px] font-extrabold uppercase tracking-wider text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 hover:border-indigo-500/35 transition-all cursor-pointer select-none"
+                          title="New Chat"
+                        >
+                          <Plus className="w-3 h-3 text-indigo-400" strokeWidth={3} />
+                          <span>New</span>
+                        </button>
+                      </div>
                     </div>
-                    
-                    <button
-                      onClick={() => handleSendAgentMessage(agentInputValue)}
-                      disabled={!agentInputValue.trim()}
-                      className={`p-1.5 rounded-lg transition-all active:scale-95 cursor-pointer ${
-                        agentInputValue.trim() 
-                          ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/25' 
-                          : 'bg-zinc-900/50 text-zinc-600 cursor-not-allowed border border-zinc-900/50'
-                      }`}
-                      title="Send Command"
-                    >
-                      <Send className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-                <div className="text-[8px] text-zinc-600 text-center font-extrabold uppercase tracking-widest select-none">
-                  N.O.V.A. Browser Copilot v1.0
-                </div>
-              </div>
 
-            </div>
+                    {/* Chat Messages Container */}
+                    <div className="flex-grow overflow-y-auto p-4 flex flex-col gap-6 no-scrollbar bg-[#0f0f12]">
+                      {agentMessages.map((msg) => (
+                        <div 
+                          key={msg.id}
+                          className={`flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-300 ${
+                            msg.sender === 'user' ? 'items-end' : 'items-start'
+                          }`}
+                        >
+                          {msg.sender === 'agent' ? (
+                            /* Agent Message: Raw text directly on background canvas */
+                            <div className="w-full text-left">
+                              <div className="flex gap-2 items-center mb-1.5 text-zinc-400 text-[10px] font-bold">
+                                <div className="p-1 rounded-lg bg-gradient-to-r from-blue-500/10 via-indigo-500/10 to-purple-500/10 text-indigo-400 border border-indigo-500/15">
+                                  <Sparkles className="w-3 h-3 text-indigo-400" />
+                                </div>
+                                <span className="bg-gradient-to-r from-blue-300 to-indigo-300 bg-clip-text text-transparent font-extrabold uppercase tracking-wider">N.O.V.A. Copilot</span>
+                              </div>
+                              <div className="pl-6 text-[11.5px] text-zinc-200 leading-relaxed select-text font-sans">
+                                {renderMessageContent(msg.content)}
+                              </div>
+                              <span className="block text-[7.5px] text-zinc-650 font-bold uppercase mt-1 pl-6 tracking-wide select-none">
+                                {new Date(msg.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                          ) : (
+                            /* User Message: Clean dark grey pill aligned to the right */
+                            <div className="max-w-[85%] text-right">
+                              <div className="p-3 bg-[#1e1f20] border border-zinc-800/40 rounded-[20px] text-[11.5px] text-[#e3e3e3] text-left leading-relaxed font-sans font-medium shadow-sm">
+                                {renderMessageContent(msg.content)}
+                              </div>
+                              <span className="block text-[7.5px] text-zinc-650 font-bold uppercase mt-1 mr-2 tracking-wide select-none">
+                                You • {new Date(msg.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+
+                      {/* Typing status indicator */}
+                      {isAgentTyping && (
+                        <div className="w-full text-left animate-pulse">
+                          <div className="flex gap-2 items-center mb-1.5 text-zinc-500 text-[10px] font-bold">
+                            <div className="p-1 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/10">
+                              <Bot className="w-3 h-3 animate-pulse text-indigo-400" />
+                            </div>
+                            <span className="text-zinc-500 font-extrabold uppercase tracking-wider">Copilot is thinking...</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 pl-6 py-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-gradient-to-r from-blue-400 to-indigo-400 animate-bounce [animation-delay:-0.3s]" />
+                            <span className="w-1.5 h-1.5 rounded-full bg-gradient-to-r from-indigo-400 to-purple-400 animate-bounce [animation-delay:-0.15s]" />
+                            <span className="w-1.5 h-1.5 rounded-full bg-gradient-to-r from-purple-400 to-pink-400 animate-bounce" />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Prompt templates (only show on fresh welcome screen) */}
+                      {agentMessages.length === 1 && (
+                        <div className="flex flex-col gap-2 mt-2 pl-6">
+                          <span className="text-[8px] text-zinc-600 font-extrabold uppercase tracking-wider select-none">Suggested Prompts</span>
+                          <div className="flex flex-col gap-1.5">
+                            {[
+                              { label: 'Summarize Page', prompt: 'Summarize the key takeaways of this page.' },
+                              { label: 'Extract Data', prompt: 'Extract page metadata structure to clean JSON format.' },
+                              { label: 'SEO Audit', prompt: 'Analyze the heading structures and meta details of this page.' }
+                            ].map((tpl, idx) => (
+                              <button
+                                key={idx}
+                                onClick={() => handleSendAgentMessage(tpl.prompt)}
+                                className="px-3.5 py-2.5 text-[10px] font-bold text-zinc-400 hover:text-white bg-[#1e1f20]/40 hover:bg-indigo-600/10 border border-zinc-800/40 hover:border-indigo-500/20 rounded-xl transition-all cursor-pointer text-left w-full shadow-sm"
+                              >
+                                {tpl.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div ref={messagesEndRef} />
+                    </div>
+
+                    {/* Input Panel (Bottom) */}
+                    <div className="p-3 bg-[#0f0f12] border-t border-zinc-900/60 flex flex-col gap-2">
+                      <div className="relative flex flex-col bg-[#1e1f20] border border-zinc-800/40 rounded-[22px] px-3.5 py-2.5 focus-within:border-zinc-700 focus-within:shadow-[0_0_12px_rgba(255,255,255,0.02)] transition-all">
+                        <textarea
+                          rows={2}
+                          value={agentInputValue}
+                          onChange={(e) => setAgentInputValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              handleSendAgentMessage(agentInputValue);
+                            }
+                          }}
+                          placeholder="Ask N.O.V.A. to analyze or automate..."
+                          className="w-full bg-transparent text-[11.5px] text-zinc-200 placeholder-zinc-500 outline-none resize-none font-sans leading-relaxed pr-20 no-scrollbar"
+                        />
+                        
+                        <div className="flex justify-between items-center mt-2.5 pt-2 border-t border-zinc-900/40">
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => alert('Attachments features coming soon!')}
+                              className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-all cursor-pointer"
+                              title="Upload File"
+                            >
+                              <Paperclip className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => alert('Voice typing coming soon!')}
+                              className="p-1 rounded text-zinc-400 hover:text-[#ea4335] hover:bg-[#ea4335]/10 transition-all cursor-pointer"
+                              title="Voice Input"
+                            >
+                              <Mic className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          
+                          <button
+                            onClick={() => handleSendAgentMessage(agentInputValue)}
+                            disabled={!agentInputValue.trim()}
+                            className={`p-1.5 rounded-full transition-all active:scale-95 cursor-pointer ${
+                              agentInputValue.trim() 
+                                ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/25' 
+                                : 'bg-zinc-800/30 text-zinc-500 cursor-not-allowed border border-zinc-800/30'
+                            }`}
+                            title="Send Command"
+                          >
+                            <Send className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-[7.5px] text-zinc-600 text-center font-bold uppercase tracking-widest select-none">
+                        N.O.V.A. Browser Copilot v1.0
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -220,3 +220,38 @@
 .plus-animate-pop {
   animation: plus-pop 350ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
+
+/* ─── Premium Modern Scrollbars (Invisible by default, visible on hover) ─── */
+::-webkit-scrollbar {
+  width: 6px !important;
+  height: 6px !important;
+  background-color: transparent !important;
+}
+
+::-webkit-scrollbar-track {
+  background-color: transparent !important;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: transparent !important;
+  border-radius: 9999px !important;
+  border: 1px solid transparent !important;
+  background-clip: padding-box !important;
+  transition: background-color 0.2s ease-in-out !important;
+}
+
+/* Show scrollbar thumb when hovering over any scrollable element */
+*:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(156, 163, 175, 0.25) !important; /* zinc-400 equivalent */
+}
+
+/* Brighten the thumb when directly hovering over the scrollbar itself */
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(99, 102, 241, 0.55) !important; /* Indigo primary styling */
+}
+
+/* Stable scrollbar positioning to prevent layout shifts */
+html, body {
+  scrollbar-gutter: stable;
+  overflow-y: auto;
+}
