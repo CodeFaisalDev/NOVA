@@ -34,7 +34,10 @@ pub fn run() {
       browser::close_window,
       browser::get_google_suggestions,
       browser::call_llm_api,
-      browser::eval_js_in_browser
+      browser::eval_js_in_browser,
+      browser::get_webview_text,
+      browser::get_system_ram,
+      browser::check_python_installed
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

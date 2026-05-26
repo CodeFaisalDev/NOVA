@@ -1,5 +1,6 @@
 use tauri::{AppHandle, Manager, WebviewUrl};
 use tauri::webview::WebviewBuilder;
+use sysinfo::System;
 
 /// Initializes the browser webview window as a child of the main window
 pub fn init_background_browser(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -337,3 +338,62 @@ pub async fn call_llm_api(
 
     Err(format!("Unexpected response format: {:?}", response_value))
 }
+
+/// Retrieves the visible text of the page loaded in the background browser webview
+#[tauri::command]
+pub async fn get_webview_text(app: AppHandle) -> Result<String, String> {
+    let webview = app.get_webview("background_browser")
+        .ok_or_else(|| "Background browser window not found".to_string())?;
+
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
+
+    webview.eval_with_callback(
+        "document.body.innerText || ''",
+        move |result| {
+            let _ = tx.blocking_send(result);
+        }
+    ).map_err(|e| e.to_string())?;
+
+    let js_result = rx.recv().await.ok_or_else(|| "Failed to receive webview text".to_string())?;
+    
+    // Parse the JSON-serialized string returned by eval_with_callback
+    let text: String = serde_json::from_str(&js_result).unwrap_or(js_result);
+    Ok(text)
+}
+
+/// Retrieves the total system memory (RAM) in GB
+#[tauri::command]
+pub fn get_system_ram() -> Result<f64, String> {
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    let total_ram_bytes = sys.total_memory();
+    let total_ram_gb = (total_ram_bytes as f64) / (1024.0 * 1024.0 * 1024.0);
+    Ok(total_ram_gb)
+}
+
+/// Checks if Python is installed and returns its version
+#[tauri::command]
+pub fn check_python_installed() -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    let cmd = "python";
+    #[cfg(not(target_os = "windows"))]
+    let cmd = "python3";
+
+    match std::process::Command::new(cmd).arg("--version").output() {
+        Ok(output) => {
+            if output.status.success() {
+                let ver = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if ver.is_empty() {
+                    let ver_err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    Ok(Some(ver_err))
+                } else {
+                    Ok(Some(ver))
+                }
+            } else {
+                Ok(None)
+            }
+        }
+        Err(_) => Ok(None)
+    }
+}
+

@@ -147,3 +147,35 @@ export async function evalJsInBrowser(js: string): Promise<void> {
   }
 }
 
+/**
+ * Retrieves the visible body text of the child browser webview.
+ */
+export async function getWebviewText(): Promise<string> {
+  if (!isTauri()) {
+    console.warn('Tauri environment not detected. Mocking getWebviewText.');
+    return 'This is a mock webpage text content from Wikipedia. Wikipedia is a free online encyclopedia...';
+  }
+  return invoke<string>('get_webview_text');
+}
+
+/**
+ * Retrieves the total system memory (RAM) in GB.
+ */
+export async function getSystemRam(): Promise<number> {
+  if (!isTauri()) {
+    return 16.0; // Mock 16GB RAM for browser environment
+  }
+  return invoke<number>('get_system_ram');
+}
+
+/**
+ * Checks if Python is installed on the host system.
+ */
+export async function checkPythonInstalled(): Promise<string | null> {
+  if (!isTauri()) {
+    return "Python 3.10.12"; // Mock Python version in browser
+  }
+  return invoke<string | null>('check_python_installed');
+}
+
+
