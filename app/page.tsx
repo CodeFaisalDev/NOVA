@@ -3026,11 +3026,11 @@ Current context:
                                 <span>Gemini Nano is Not Detected</span>
                               </div>
                               <p className="text-[10.5px] leading-relaxed text-zinc-650 dark:text-zinc-400">
-                                Chrome native `window.ai` language model was not found in your current webview environment. To enable it:
+                                Native `window.ai` is not yet active in N.O.V.A.'s Chromium Webview runtime. You can run Gemini Nano directly within N.O.V.A. in one of two ways:
                               </p>
-                              <ol className="list-decimal pl-4 text-[10.5px] text-zinc-600 dark:text-zinc-450 flex flex-col gap-0.5">
-                                <li>Use Google Chrome Beta or Canary.</li>
-                                <li>Configure **#optimization-guide-on-device-model** and **#prompt-api-for-gemini-nano** flags.</li>
+                              <ol className="list-decimal pl-4 text-[10.5px] text-zinc-600 dark:text-zinc-450 flex flex-col gap-1">
+                                <li><strong>One-Click Setup:</strong> Click the "Download Gemini Nano" button below to let N.O.V.A. configure flags and install the components inside its runtime.</li>
+                                <li><strong>Manual Config:</strong> Enable Chromium Webview developer switches with features <code>OptimizationGuideModelDownloading,PromptAPI</code> enabled.</li>
                               </ol>
                               <p className="text-[10.5px] text-zinc-650 dark:text-zinc-400 font-medium mt-0.5">
                                 <strong>Alternative:</strong> Download any local GGUF model below. N.O.V.A. will install Python libraries and configure a local sidecar automatically!
