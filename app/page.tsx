@@ -329,6 +329,7 @@ export default function Home() {
 
   // Dependency setup modal states (Phase 3 Enhancement)
   const [showDependencyModal, setShowDependencyModal] = useState(false);
+  const [isGeminiNanoAvailable, setIsGeminiNanoAvailable] = useState<boolean | null>(null);
   const [dependencyModelId, setDependencyModelId] = useState<string | null>(null);
   const [pythonVersion, setPythonVersion] = useState<string | null>(null);
   const [isCheckingDeps, setIsCheckingDeps] = useState(false);
@@ -905,6 +906,24 @@ Current context:
     const savedActiveVisionModel = localStorage.getItem('nova-active-vision-model') || '';
     setActiveTextModel(savedActiveTextModel);
     setActiveVisionModel(savedActiveVisionModel);
+
+    // Check if Gemini Nano is available (window.ai)
+    const checkGeminiNanoAvailability = () => {
+      try {
+        const hasAi = typeof window !== 'undefined' && 
+                      typeof (window as any).ai !== 'undefined' && 
+                      typeof (window as any).ai.languageModel !== 'undefined';
+        setIsGeminiNanoAvailable(hasAi);
+        
+        if (!savedActiveTextModel) {
+          setActiveTextModel('gemini-nano');
+          localStorage.setItem('nova-active-text-model', 'gemini-nano');
+        }
+      } catch (err) {
+        setIsGeminiNanoAvailable(false);
+      }
+    };
+    checkGeminiNanoAvailability();
 
     // Get system specs
     const fetchSystemSpecs = async () => {
@@ -2887,14 +2906,44 @@ Current context:
                           }}
                           className="w-full h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs focus:border-indigo-500 outline-hidden transition-all text-zinc-800 dark:text-white font-bold"
                         >
-                          <option value="gemini-nano">Gemini Nano (Chrome window.ai - Thesis native)</option>
+                          <option value="gemini-nano">
+                            Gemini Nano (window.ai) — {isGeminiNanoAvailable ? "✓ Detected" : "✗ Not Detected"}
+                          </option>
                           {LOCAL_MODELS.filter(m => m.category === 'text' && downloadedModels.includes(m.id)).map(m => (
                             <option key={m.id} value={m.id}>{m.name} ({m.variant})</option>
                           ))}
                         </select>
-                        <span className="text-[10px] text-zinc-500 mt-0.5">
+                        <span className="text-[10px] text-zinc-550 mt-0.5 block leading-normal">
                           Runs locally for `extract` actions. Fallbacks to cloud if local sidecar is offline.
                         </span>
+                        
+                        {activeTextModel === 'gemini-nano' && (
+                          isGeminiNanoAvailable ? (
+                            <div className="mt-2.5 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-650 dark:text-emerald-400 text-xs flex items-center gap-2">
+                              <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping shrink-0" />
+                              <span className="leading-snug">
+                                <strong>Gemini Nano Status:</strong> Active & fully available via native `window.ai`. On-device processing is ready.
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="mt-2.5 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-650 dark:text-red-400 text-xs flex flex-col gap-1.5">
+                              <div className="flex items-center gap-2 font-bold">
+                                <ShieldAlert className="w-4 h-4 text-red-500 dark:text-red-400 shrink-0" />
+                                <span>Gemini Nano is Not Detected</span>
+                              </div>
+                              <p className="text-[10.5px] leading-relaxed text-zinc-650 dark:text-zinc-400">
+                                Chrome native `window.ai` language model was not found in your current webview environment. To enable it:
+                              </p>
+                              <ol className="list-decimal pl-4 text-[10.5px] text-zinc-600 dark:text-zinc-450 flex flex-col gap-0.5">
+                                <li>Use Google Chrome Beta or Canary.</li>
+                                <li>Configure **#optimization-guide-on-device-model** and **#prompt-api-for-gemini-nano** flags.</li>
+                              </ol>
+                              <p className="text-[10.5px] text-zinc-600 dark:text-zinc-400 font-medium mt-0.5">
+                                <strong>Alternative:</strong> Download any local GGUF model below. N.O.V.A. will install Python libraries and configure a local sidecar automatically!
+                              </p>
+                            </div>
+                          )
+                        )}
                       </div>
 
                       {/* Vision Model Dropdown */}
