@@ -171,6 +171,7 @@ export default function BrowserToolbar({
   onPopoverWidthChange,
 }: BrowserToolbarProps) {
   const [inputUrl, setInputUrl] = useState(url);
+  const isNewTab = url === 'nova://newtab';
   const [activePopover, setActivePopover] = useState<'profile' | 'menu' | 'adblock' | 'wallet' | 'extensions' | 'apps' | null>(null);
   const showProfilePopover = activePopover === 'profile';
   const showMenuPopover = activePopover === 'menu';
@@ -206,6 +207,7 @@ export default function BrowserToolbar({
     else if (popover === 'adblock') width = 224;
     else if (popover === 'extensions') width = 224;
     else if (popover === 'apps') width = 224;
+    else if (popover === 'wallet') width = 224;
 
     if (onPopoverWidthChange) {
       onPopoverWidthChange(width);
@@ -902,12 +904,23 @@ export default function BrowserToolbar({
           {/* Google Profile Avatar and simulated Sign-In Popover */}
           <div className="relative ml-0.5">
             <button
+              disabled={!isNewTab}
               onClick={(e) => {
                 e.stopPropagation();
                 setShowProfilePopover(!showProfilePopover);
               }}
-              className="w-8 h-8 rounded-full overflow-hidden border border-zinc-800 hover:border-zinc-700 bg-zinc-900 flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 shadow-md"
-              title={user ? `Google Account: ${user.name}` : 'Sign in to Google'}
+              className={`w-8 h-8 rounded-full overflow-hidden border border-zinc-800 bg-zinc-900 flex items-center justify-center transition-all duration-200 shadow-md ${
+                isNewTab
+                  ? 'hover:border-zinc-700 hover:scale-105 active:scale-95 cursor-pointer'
+                  : 'opacity-40 cursor-not-allowed'
+              }`}
+              title={
+                !isNewTab
+                  ? 'Google Account (Only available on New Tab page)'
+                  : user
+                    ? `Google Account: ${user.name}`
+                    : 'Sign in to Google'
+              }
             >
               {user && user.email && user.email.toLowerCase() === 'code.faisal.dev@gmail.com' ? (
                 <div className="w-full h-full bg-[#fefefe] flex items-center justify-center">
@@ -1159,12 +1172,17 @@ export default function BrowserToolbar({
           {/* 3-Dots Vertical Menu */}
           <div className="relative">
             <button
+              disabled={!isNewTab}
               onClick={(e) => {
                 e.stopPropagation();
                 setShowMenuPopover(!showMenuPopover);
               }}
-              className={`p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/50 transition-all flex items-center justify-center ${showMenuPopover ? 'bg-zinc-800/50 text-white' : ''}`}
-              title="Browser Menu"
+              className={`p-1 rounded-lg text-zinc-400 transition-all flex items-center justify-center ${showMenuPopover ? 'bg-zinc-800/50 text-white' : ''} ${
+                isNewTab
+                  ? 'hover:text-white hover:bg-zinc-800/50 cursor-pointer'
+                  : 'opacity-30 cursor-not-allowed'
+              }`}
+              title={!isNewTab ? 'Browser Menu (Only available on New Tab page)' : 'Browser Menu'}
             >
               <svg className="w-4.5 h-4.5 fill-current" viewBox="0 0 24 24">
                 <circle cx="12" cy="5" r="2" />
